@@ -26,7 +26,10 @@ export class SOAPClient {
    */
   async writeMetermis(sql: string): Promise<any> {
     const upper = sql.trim().toUpperCase();
-    const allowed = ['INSERT', 'UPDATE', 'DELETE'];
+    // Allow multi-statement import scripts such as Big Query.txt, which start
+    // with BEGIN TRY / BEGIN TRAN and then perform INSERT statements. The
+    // dangerous keyword block below still prevents DDL and execution-style SQL.
+    const allowed = ['INSERT', 'UPDATE', 'DELETE', 'BEGIN', 'DECLARE', 'WITH', 'MERGE'];
     if (!allowed.some(k => upper.startsWith(k))) {
       throw new Error(`writeMetermis only allows INSERT/UPDATE/DELETE. Got: ${upper.substring(0, 20)}`);
     }
@@ -77,7 +80,8 @@ export class SOAPClient {
    */
   async writeReadings(sql: string): Promise<any> {
     const upper = sql.trim().toUpperCase();
-    const allowed = ['INSERT', 'UPDATE', 'DELETE'];
+    // Keep Readings write behaviour aligned with Metermis write behaviour.
+    const allowed = ['INSERT', 'UPDATE', 'DELETE', 'BEGIN', 'DECLARE', 'WITH', 'MERGE'];
     if (!allowed.some(k => upper.startsWith(k))) {
       throw new Error(`writeReadings only allows INSERT/UPDATE/DELETE. Got: ${upper.substring(0, 20)}`);
     }
