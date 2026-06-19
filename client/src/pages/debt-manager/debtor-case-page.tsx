@@ -22,6 +22,7 @@ import {
   MessageSquare,
   Paperclip,
   Phone,
+  UploadCloud,
   Send,
   ShieldAlert,
   Sparkles,
@@ -69,6 +70,61 @@ interface ApiResponse<T> {
 interface DebtCaseDetailPayload {
   case: DebtCaseRecord;
   events: DebtCaseEventRow[];
+}
+
+interface CaseTransactionPayload {
+  debtCase: {
+    debtCaseId: number | string;
+    accountNo: string;
+    debtorName: string;
+    totalOutstanding: number;
+  };
+  money: {
+    verifiedPaid: number;
+    calculatedRemaining: number;
+    progressPercent: number;
+    transactionCount: number;
+    lastPaymentAt?: string | null;
+    source: string;
+    rule: string;
+    note: string;
+  };
+  transactions: Array<{
+    accountNo: string;
+    debtorName: string;
+    agentName: string;
+    amount: number;
+    tranDate: string | null;
+    journalNo: string | number | null;
+    description: string | null;
+  }>;
+  timeline: Array<{
+    date: string;
+    value: number;
+    count: number;
+  }>;
+}
+
+interface WhatsAppSendPayload {
+  success: boolean;
+  data?: {
+    success?: boolean;
+    skipped?: boolean;
+    reason?: string;
+    whatsappMessageId?: string;
+    templateName?: string;
+    appName?: string;
+    requestedBy?: string;
+    raw?: unknown;
+  };
+  message?: string;
+}
+
+interface WhatsAppTemplateConfig {
+  templateName: string;
+  languageCode: string;
+  variables: string[];
+  preview: string;
 }
 
 interface DebtCaseAgent {
@@ -165,6 +221,20 @@ type PreparedAttachment = {
   content: string;
   contentType: string;
   sizeLabel: string;
+  url?: string;
+};
+
+type ToastVariant = "success" | "error" | "warning" | "info";
+
+type AppToast = {
+  id: string;
+  variant: ToastVariant;
+  title: string;
+  description?: string;
+  actionLabel?: string;
+  cancelLabel?: string;
+  persistent?: boolean;
+  onAction?: () => void | Promise<void>;
 };
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -675,8 +745,15 @@ function getDraftForCase(
   };
 }
 
-function getFinalDemandEmailDraft(caseRow: DebtCaseRecord) {
+function getFinalDemandDraft(caseRow: DebtCaseRecord, channel: MessageChannel) {
   const balance = formatCurrency(asNumber(caseRow.TotalOutstanding));
+
+  if (channel === "whatsapp") {
+    return {
+      subject: "",
+      body: `Good day ${caseRow.DebtorName}. This is a final demand for Protea Metering account ${caseRow.AccountNo}. Outstanding balance: ${balance}. Please make urgent payment or contact us immediately.`,
+    };
+  }
 
   return {
     subject: `Final demand for account ${caseRow.AccountNo}`,
@@ -689,6 +766,63 @@ function parseWhatsAppVariables(text: string): string[] {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+
+function formatTemplateAmount(value: unknown) {
+  return asNumber(value).toFixed(2);
+}
+
+function addDaysIsoFromNow(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function getInvoiceNumber(caseRow: DebtCaseRecord) {
+  return caseRow.InvoiceFileName?.replace(/\.[^.]+$/, "") || caseRow.AccountNo || String(caseRow.DebtCaseID);
+}
+
+function getAccountOrPremises(caseRow: DebtCaseRecord) {
+  return caseRow.ComplexName || caseRow.AccountNo || caseRow.DebtorName;
+}
+
+function getWhatsAppTemplateConfig(
+  caseRow: DebtCaseRecord,
+  mode: "invoice" | "followup" | "final-demand",
+): WhatsAppTemplateConfig {
+  const clientName = caseRow.DebtorName || "Client";
+  const invoiceNumber = getInvoiceNumber(caseRow);
+  const accountOrPremises = getAccountOrPremises(caseRow);
+  const amount = formatTemplateAmount(caseRow.TotalOutstanding);
+
+  if (mode === "invoice") {
+    const dueDate = formatShortDate(caseRow.Reminder7DueAt || addDaysIsoFromNow(7));
+    return {
+      templateName: "debt_invoice_document",
+      languageCode: "en",
+      variables: [clientName, invoiceNumber, accountOrPremises, amount, dueDate],
+      preview: `Dear ${clientName}, your invoice ${invoiceNumber} for ${accountOrPremises} is attached. Amount due: R ${amount}. Due date: ${dueDate}.`,
+    };
+  }
+
+  if (mode === "final-demand") {
+    const finalDate = formatShortDate(caseRow.Reminder14DueAt || addDaysIsoFromNow(14));
+    return {
+      templateName: "debt_final_demand_document",
+      languageCode: "en",
+      variables: [clientName, accountOrPremises, amount, finalDate],
+      preview: `Dear ${clientName}, your account for ${accountOrPremises} remains overdue. Outstanding amount: R ${amount}. Final payment date: ${finalDate}.`,
+    };
+  }
+
+  const paymentDueDate = formatShortDate(caseRow.Reminder7DueAt || addDaysIsoFromNow(7));
+  return {
+    templateName: "debt_invoice_payment_followup",
+    languageCode: "en",
+    variables: [clientName, invoiceNumber, accountOrPremises, amount, paymentDueDate],
+    preview: `Dear ${clientName}, this is a reminder that invoice ${invoiceNumber} for ${accountOrPremises} is still outstanding. Outstanding amount: R ${amount}. Please make payment by ${paymentDueDate}.`,
+  };
 }
 
 function FlowTracker({ status }: { status: WorkflowStatus }) {
@@ -923,6 +1057,272 @@ function ChoiceButton({
   );
 }
 
+
+function getToastMeta(variant: ToastVariant) {
+  switch (variant) {
+    case "success":
+      return {
+        Icon: CheckCircle2,
+        ring: "border-secondary/25 bg-secondary/10 text-[hsl(142,100%,25%)]",
+        glow: "shadow-[0_22px_60px_-32px_rgba(0,224,104,0.58)]",
+        accent: "bg-secondary",
+      };
+    case "error":
+      return {
+        Icon: ShieldAlert,
+        ring: "border-destructive/25 bg-destructive/10 text-destructive",
+        glow: "shadow-[0_22px_60px_-32px_rgba(239,68,68,0.55)]",
+        accent: "bg-destructive",
+      };
+    case "warning":
+      return {
+        Icon: ShieldAlert,
+        ring: "border-[hsl(24,92%,56%)]/30 bg-[hsl(24,92%,56%)]/12 text-[hsl(24,82%,42%)]",
+        glow: "shadow-[0_24px_65px_-34px_rgba(249,115,22,0.58)]",
+        accent: "bg-[hsl(24,92%,56%)]",
+      };
+    default:
+      return {
+        Icon: Sparkles,
+        ring: "border-primary/25 bg-primary/10 text-primary",
+        glow: "shadow-[0_22px_60px_-32px_rgba(8,38,84,0.45)]",
+        accent: "bg-primary",
+      };
+  }
+}
+
+function ToastStack({
+  toasts,
+  onDismiss,
+}: {
+  toasts: AppToast[];
+  onDismiss: (id: string) => void;
+}) {
+  if (!toasts.length) return null;
+
+  return (
+    <div className="fixed right-4 top-4 z-[100] flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3">
+      {toasts.map((toast) => {
+        const meta = getToastMeta(toast.variant);
+        const Icon = meta.Icon;
+
+        return (
+          <div
+            key={toast.id}
+            className={`relative overflow-hidden rounded-2xl border border-border/70 bg-card/95 p-4 text-foreground backdrop-blur-xl ${meta.glow}`}
+          >
+            <div className={`absolute inset-x-0 top-0 h-1 ${meta.accent}`} />
+
+            <div className="flex gap-3">
+              <div
+                className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${meta.ring}`}
+              >
+                <Icon className="h-5 w-5" />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold tracking-tight">
+                      {toast.title}
+                    </p>
+                    {toast.description ? (
+                      <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                        {toast.description}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onDismiss(toast.id)}
+                    className="rounded-full p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    aria-label="Dismiss notification"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {(toast.actionLabel || toast.cancelLabel) ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {toast.actionLabel ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
+                        onClick={async () => {
+                          onDismiss(toast.id);
+                          await toast.onAction?.();
+                        }}
+                      >
+                        {toast.actionLabel}
+                      </Button>
+                    ) : null}
+
+                    {toast.cancelLabel ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="rounded-lg"
+                        onClick={() => onDismiss(toast.id)}
+                      >
+                        {toast.cancelLabel}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+function MoneyProgressBubble({
+  debtCase,
+  transactionData,
+  isLoading,
+}: {
+  debtCase: DebtCaseRecord;
+  transactionData?: CaseTransactionPayload | null;
+  isLoading?: boolean;
+}) {
+  const originalOutstanding = asNumber(debtCase.TotalOutstanding);
+  const verifiedPaid = asNumber(transactionData?.money?.verifiedPaid);
+
+  const calculatedRemaining =
+    transactionData?.money?.calculatedRemaining !== undefined
+      ? asNumber(transactionData.money.calculatedRemaining)
+      : Math.max(originalOutstanding - verifiedPaid, 0);
+
+  const progressPercent =
+    transactionData?.money?.progressPercent !== undefined
+      ? Math.max(0, Math.min(100, asNumber(transactionData.money.progressPercent)))
+      : originalOutstanding > 0
+        ? Math.max(0, Math.min(100, Math.round((verifiedPaid / originalOutstanding) * 100)))
+        : verifiedPaid > 0
+          ? 100
+          : 0;
+
+  const hasVerifiedMoney = verifiedPaid > 0;
+  const transactionCount = asNumber(transactionData?.money?.transactionCount);
+  const lastPaymentAt = transactionData?.money?.lastPaymentAt ?? null;
+
+  return (
+    <div className="relative overflow-hidden rounded-3xl border border-white/15 bg-[#0b1c51] p-4 text-white shadow-xl backdrop-blur-md">
+      <div className="pointer-events-none absolute -right-12 -top-12 h-28 w-28 rounded-full bg-white/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-14 left-1/2 h-24 w-24 rounded-full bg-secondary/20 blur-2xl" />
+
+      <div className="relative grid gap-5 md:grid-cols-[auto_1fr] md:items-center">
+        <div
+          className="grid h-28 w-28 shrink-0 place-items-center rounded-full p-2"
+          style={{
+            background: `conic-gradient(rgba(0,224,104,0.95) ${
+              progressPercent * 3.6
+            }deg, rgba(255,255,255,0.18) 0deg)`,
+          }}
+        >
+          <div className="grid h-full w-full place-items-center rounded-full bg-[#0b1c51] text-center shadow-inner ring-1 ring-white/10">
+            <div>
+              <p className="text-2xl font-semibold tracking-tight text-white tabular-nums">
+                {progressPercent}%
+              </p>
+              <p className="text-[10px] uppercase tracking-[0.16em] text-white/65">
+                paid
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="min-w-0 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/65">
+                Verified transaction progress
+              </p>
+
+              <h3 className="mt-1 text-xl font-semibold tracking-tight text-white">
+                {isLoading
+                  ? "Checking live transactions..."
+                  : hasVerifiedMoney
+                    ? "Money received against this account"
+                    : "No verified money received yet"}
+              </h3>
+
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-white/70">
+                Pulled from the dedicated transaction controller. User-marked
+                payment flags are not counted as money.
+              </p>
+            </div>
+
+            <span className="inline-flex w-fit items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium text-white/85">
+              GL 1070 verified
+            </span>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="flex min-h-[86px] flex-col justify-between rounded-2xl border border-white/12 bg-white/[0.08] p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-white/60">
+                Original debt
+              </p>
+              <p className="mt-2 text-sm font-semibold text-white tabular-nums">
+                {formatCurrency(originalOutstanding)}
+              </p>
+            </div>
+
+            <div className="flex min-h-[86px] flex-col justify-between rounded-2xl border border-secondary/35 bg-secondary/15 p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-white/65">
+                Verified paid
+              </p>
+              <p className="mt-2 text-sm font-semibold text-white tabular-nums">
+                {formatCurrency(verifiedPaid)}
+              </p>
+            </div>
+
+            <div className="flex min-h-[86px] flex-col justify-between rounded-2xl border border-white/12 bg-white/[0.08] p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-white/60">
+                Remaining
+              </p>
+              <p className="mt-2 text-sm font-semibold text-white tabular-nums">
+                {formatCurrency(calculatedRemaining)}
+              </p>
+            </div>
+
+            <div className="flex min-h-[86px] flex-col justify-between rounded-2xl border border-white/12 bg-white/[0.08] p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-white/60">
+                Transactions
+              </p>
+              <p className="mt-2 text-sm font-semibold text-white tabular-nums">
+                {transactionCount}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1 text-xs text-white/65 sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              Last verified payment:{" "}
+              <span className="font-medium text-white/85">
+                {lastPaymentAt ? formatShortDate(lastPaymentAt) : "None found"}
+              </span>
+            </span>
+
+            <span className="text-white/55">
+              Source:{" "}
+              <span className="text-white/70">
+                {transactionData?.money?.source ?? "JournalTrans GL 1070 credits"}
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DebtorCasePage() {
   const [, setLocation] = useLocation();
   const [match, params] = useRoute("/debt-manager/debtors/:id");
@@ -942,11 +1342,61 @@ export default function DebtorCasePage() {
   const [statusUpdateNote, setStatusUpdateNote] = useState("");
   const [escalationReason, setEscalationReason] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<AppToast[]>([]);
   const [emailAttachments, setEmailAttachments] = useState<PreparedAttachment[]>([]);
   const [whatsappTemplateName, setWhatsappTemplateName] = useState("");
   const [whatsappLanguageCode, setWhatsappLanguageCode] = useState("en");
   const [whatsappVariablesText, setWhatsappVariablesText] = useState("");
   const seededDraftRef = useRef<string | null>(null);
+
+  function dismissToast(id: string) {
+    setToasts((previous) => previous.filter((toast) => toast.id !== id));
+  }
+
+  function showToast(toast: Omit<AppToast, "id">) {
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    const nextToast: AppToast = { id, ...toast };
+    setToasts((previous) => [nextToast, ...previous].slice(0, 5));
+
+    if (!toast.persistent) {
+      window.setTimeout(() => {
+        dismissToast(id);
+      }, toast.variant === "error" ? 6500 : 4500);
+    }
+
+    return id;
+  }
+
+  useEffect(() => {
+    if (!feedback) return;
+
+    const normalized = feedback.toLowerCase();
+    const variant: ToastVariant =
+      normalized.includes("failed") ||
+      normalized.includes("error") ||
+      normalized.includes("could not")
+        ? "error"
+        : normalized.includes("cancelled") || normalized.includes("canceled")
+          ? "info"
+          : "success";
+
+    showToast({
+      variant,
+      title:
+        variant === "error"
+          ? "Action failed"
+          : variant === "info"
+            ? "Action cancelled"
+            : "Action complete",
+      description: feedback,
+    });
+
+    setFeedback(null);
+  }, [feedback]);
 
   /**
    * Editable recipient fields
@@ -986,8 +1436,18 @@ export default function DebtorCasePage() {
       apiRequest<ApiResponse<DebtCaseDetailPayload>>("/api/debt-manager/cases/" + debtCaseId),
   });
 
+  const caseTransactionsQuery = useQuery({
+    queryKey: ["debt-manager", "transactions", "case", debtCaseId],
+    enabled: Boolean(debtCaseId),
+    queryFn: () =>
+      apiRequest<ApiResponse<CaseTransactionPayload>>(
+        `/api/debt-manager/transactions/case/${debtCaseId}`,
+      ),
+  });
+
   const debtCase = caseQuery.data?.data?.case ?? null;
   const caseEvents = caseQuery.data?.data?.events ?? [];
+  const transactionData = caseTransactionsQuery.data?.data ?? null;
   const workflowStatus = mapApiStatus(debtCase?.CurrentStatusName);
   const composeMode = workflowStatus === "FIRST_CONTACT" ? "invoice" : "followup";
 
@@ -1026,15 +1486,40 @@ export default function DebtorCasePage() {
     setBody(defaults.body);
 
     if (channel === "whatsapp") {
-      setWhatsappVariablesText(
-        [debtCase.DebtorName, debtCase.AccountNo, String(debtCase.TotalOutstanding ?? "")]
-          .filter(Boolean)
-          .join("\n"),
+      const template = getWhatsAppTemplateConfig(
+        debtCase,
+        composeMode === "invoice" ? "invoice" : "followup",
       );
+      setWhatsappTemplateName(template.templateName);
+      setWhatsappLanguageCode(template.languageCode);
+      setWhatsappVariablesText(template.variables.join("\n"));
     }
 
     seededDraftRef.current = seedKey;
   }, [debtCase, debtCaseId, channel, composeMode, workflowStatus]);
+
+  useEffect(() => {
+    if (!debtCase || channel !== "whatsapp") return;
+
+    const templateMode =
+      workflowStatus === "FIRST_CONTACT"
+        ? "invoice"
+        : workflowStatus === "FOLLOW_UP_7D"
+          ? "final-demand"
+          : "followup";
+
+    const template = getWhatsAppTemplateConfig(debtCase, templateMode);
+    setWhatsappTemplateName(template.templateName);
+    setWhatsappLanguageCode(template.languageCode);
+    setWhatsappVariablesText(template.variables.join("\n"));
+
+    const draft =
+      templateMode === "final-demand"
+        ? getFinalDemandDraft(debtCase, "whatsapp")
+        : getDraftForCase(debtCase, "whatsapp", templateMode === "invoice" ? "invoice" : "followup");
+    setSubject(draft.subject);
+    setBody(draft.body || template.preview);
+  }, [debtCase, channel, workflowStatus]);
 
   const invalidateCaseData = async () => {
     await Promise.all([
@@ -1043,6 +1528,9 @@ export default function DebtorCasePage() {
       }),
       queryClient.invalidateQueries({
         queryKey: ["debt-manager", "cases"],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["debt-manager", "transactions", "case", debtCaseId],
       }),
       Number.isFinite(currentAgentId)
         ? queryClient.invalidateQueries({
@@ -1085,6 +1573,15 @@ export default function DebtorCasePage() {
           body: JSON.stringify(payload),
         },
       );
+    },
+  });
+
+  const whatsappMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown>) => {
+      return apiRequest<WhatsAppSendPayload>("/api/whatsapp/send", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
     },
   });
 
@@ -1156,6 +1653,7 @@ export default function DebtorCasePage() {
   const anyMutationLoading =
     assignMutation.isPending ||
     communicationMutation.isPending ||
+    whatsappMutation.isPending ||
     reminderMutation.isPending ||
     eventMutation.isPending;
 
@@ -1219,10 +1717,16 @@ export default function DebtorCasePage() {
 
   function applyFinalDemandDraft() {
     if (!debtCase) return;
-    const draft = getFinalDemandEmailDraft(debtCase);
+    const draft = getFinalDemandDraft(debtCase, channel);
     setSubject(draft.subject);
     setBody(draft.body);
-    setChannel("email");
+
+    if (channel === "whatsapp") {
+      const template = getWhatsAppTemplateConfig(debtCase, "final-demand");
+      setWhatsappTemplateName(template.templateName);
+      setWhatsappLanguageCode(template.languageCode);
+      setWhatsappVariablesText(template.variables.join("\n"));
+    }
   }
 
   async function handleSendCommunication(sendNow: boolean) {
@@ -1269,15 +1773,44 @@ export default function DebtorCasePage() {
       }
 
       if (channel === "whatsapp") {
+        const variables = parseWhatsAppVariables(whatsappVariablesText);
         payload.templateName = whatsappTemplateName;
         payload.languageCode = whatsappLanguageCode;
-        payload.variables = parseWhatsAppVariables(whatsappVariablesText);
+        payload.variables = variables;
+        payload.attachments = attachmentPayload;
+
+        if (sendNow) {
+          const whatsappResponse = await whatsappMutation.mutateAsync({
+            to: recipientPhone || debtCase.ContactPhone,
+            templateName: whatsappTemplateName,
+            languageCode: whatsappLanguageCode,
+            variables,
+            documents: attachmentPayload,
+            appName: "DebtManager",
+            requestedBy:
+              currentAgent?.AgentName ||
+              (typeof user?.username === "string" ? user.username : undefined) ||
+              "SYSTEM",
+          });
+
+          payload.externalReference =
+            whatsappResponse.data?.whatsappMessageId ||
+            whatsappResponse.data?.reason ||
+            null;
+          payload.whatsappServiceResponse = whatsappResponse.data ?? whatsappResponse;
+        }
       }
 
       await communicationMutation.mutateAsync(payload);
-      setFeedback(sendNow ? "Communication sent successfully." : "Communication saved successfully.");
+      setFeedback(
+        sendNow
+          ? channel === "whatsapp"
+            ? "WhatsApp sent and communication logged successfully."
+            : "Communication sent successfully."
+          : "Communication saved successfully.",
+      );
 
-      if (sendNow && channel === "email") {
+      if (sendNow && (channel === "email" || channel === "whatsapp")) {
         setEmailAttachments([]);
       }
 
@@ -1312,57 +1845,75 @@ export default function DebtorCasePage() {
     }
   }
 
-  async function handleSendFinalDemandEmail() {
+  async function sendFinalDemandConfirmed() {
     if (!debtCase) return;
-
-    // If the collector is attempting to send final demand before the second 7‑day wait ends,
-    // prompt them to confirm skipping the remainder of the waiting period. This mirrors the
-    // confirmation used when sending follow‑ups early and ensures collectors understand
-    // that the case will advance to the 14‑day stage immediately.
-    if (
-      workflowStatus === "FOLLOW_UP_7D" &&
-      followUp7DaysLeft !== null &&
-      followUp7DaysLeft > 0
-    ) {
-      const confirmEarly = window.confirm(
-        "Sending the final demand before the 7‑day wait ends will skip the remaining wait and start the 14‑day period immediately. Are you sure?",
-      );
-      if (!confirmEarly) {
-        setFeedback("Final demand cancelled.");
-        return;
-      }
-    }
 
     try {
       setFeedback(null);
 
+      const isWhatsApp = channel === "whatsapp";
+      const variables = parseWhatsAppVariables(whatsappVariablesText);
+      let externalReference: string | null = null;
+      let whatsappServiceResponse: unknown = null;
+
+      if (isWhatsApp) {
+        const whatsappResponse = await whatsappMutation.mutateAsync({
+          to: recipientPhone || debtCase.ContactPhone,
+          templateName: whatsappTemplateName,
+          languageCode: whatsappLanguageCode,
+          variables,
+          documents: attachmentPayload,
+          appName: "DebtManager",
+          requestedBy:
+            currentAgent?.AgentName ||
+            (typeof user?.username === "string" ? user.username : undefined) ||
+            "SYSTEM",
+        });
+
+        externalReference =
+          whatsappResponse.data?.whatsappMessageId ||
+          whatsappResponse.data?.reason ||
+          null;
+        whatsappServiceResponse = whatsappResponse.data ?? whatsappResponse;
+      }
+
       await communicationMutation.mutateAsync({
-        channel: "email",
-        subject,
+        channel,
+        subject: channel === "email" ? subject : null,
         body,
         sendNow: true,
         attachInvoice: false,
         markContactSuccessful: true,
-        actionType: "FINAL_DEMAND_EMAIL",
+        actionType: isWhatsApp ? "FINAL_DEMAND_WHATSAPP" : "FINAL_DEMAND_EMAIL",
         recipientName: debtCase.DebtorName,
-        recipientEmail: recipientEmail || debtCase.ContactEmail,
+        recipientEmail: channel === "email" ? recipientEmail || debtCase.ContactEmail : null,
+        recipientPhone: isWhatsApp ? recipientPhone || debtCase.ContactPhone : null,
         triggeredByAgentId: currentAgentId,
         attachments: attachmentPayload,
-        note: "Final demand email sent from debt flow.",
+        templateName: isWhatsApp ? whatsappTemplateName : undefined,
+        languageCode: isWhatsApp ? whatsappLanguageCode : undefined,
+        variables: isWhatsApp ? variables : undefined,
+        externalReference,
+        whatsappServiceResponse,
+        note: isWhatsApp
+          ? "Final demand WhatsApp sent from debt flow."
+          : "Final demand email sent from debt flow.",
       });
 
       await eventMutation.mutateAsync({
         eventType: "FINAL_DEMAND_SENT",
         note:
           statusUpdateNote ||
-          "Final demand email sent from debt flow and 14 day cycle started.",
-        channel: "email",
-        subject,
+          (isWhatsApp
+            ? "Final demand WhatsApp sent from debt flow and 14 day cycle started."
+            : "Final demand email sent from debt flow and 14 day cycle started."),
+        channel,
+        subject: channel === "email" ? subject : null,
         body,
         triggeredByAgentId: currentAgentId,
       });
 
-      setFeedback("Final demand email sent and case moved to the 14 day stage.");
+      setFeedback(`${isWhatsApp ? "Final demand WhatsApp" : "Final demand email"} sent and case moved to the 14 day stage.`);
       setEmailAttachments([]);
       await invalidateCaseData();
     } catch (error) {
@@ -1370,6 +1921,29 @@ export default function DebtorCasePage() {
         error instanceof Error ? error.message : "Failed to send final demand.",
       );
     }
+  }
+
+  async function handleSendFinalDemand() {
+    if (!debtCase) return;
+
+    if (
+      workflowStatus === "FOLLOW_UP_7D" &&
+      followUp7DaysLeft !== null &&
+      followUp7DaysLeft > 0
+    ) {
+      showToast({
+        variant: "warning",
+        title: "Skip the remaining waiting period?",
+        description: `There ${followUp7DaysLeft === 1 ? "is" : "are"} ${followUp7DaysLeft} day${followUp7DaysLeft === 1 ? "" : "s"} left in the second 7 day wait. Sending the final demand now will move this case straight into the 14 day waiting period.`,
+        actionLabel: "Send final demand now",
+        cancelLabel: "Keep waiting",
+        persistent: true,
+        onAction: sendFinalDemandConfirmed,
+      });
+      return;
+    }
+
+    await sendFinalDemandConfirmed();
   }
 
   async function handleConfirmResolution() {
@@ -1392,6 +1966,19 @@ export default function DebtorCasePage() {
         error instanceof Error ? error.message : "Failed to confirm resolution.",
       );
     }
+  }
+
+  function requestEarlyResolutionConfirmation() {
+    showToast({
+      variant: "warning",
+      title: "Complete the case early?",
+      description:
+        "Confirming this outcome will skip any remaining workflow stages and mark the case according to the selected resolution. No fake dates will be added.",
+      actionLabel: "Confirm resolution",
+      cancelLabel: "Cancel",
+      persistent: true,
+      onAction: handleConfirmResolution,
+    });
   }
 
   async function handleStatusUpdate(eventType: string, note: string) {
@@ -1432,20 +2019,26 @@ export default function DebtorCasePage() {
   }
 
   function renderAttachmentPanel() {
-    if (channel !== "email") return null;
+    if (channel === "phone") return null;
+
+    const isWhatsApp = channel === "whatsapp";
 
     return (
       <div className="space-y-2 rounded-xl border border-border bg-background p-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-medium text-foreground">Email attachments</p>
+            <p className="text-sm font-medium text-foreground">
+              {isWhatsApp ? "WhatsApp document upload" : "Email attachments"}
+            </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Attach invoice files or supporting documents here.
+              {isWhatsApp
+                ? "Upload the invoice or final demand document. It will be passed to the WhatsApp document template."
+                : "Attach invoice files or supporting documents here."}
             </p>
           </div>
 
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/40">
-            <Paperclip className="h-4 w-4" />
+            {isWhatsApp ? <UploadCloud className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
             Add files
             <input
               type="file"
@@ -1619,32 +2212,42 @@ export default function DebtorCasePage() {
                 />
               </div>
 
-              <input
-                value={whatsappTemplateName}
-                onChange={(event) => setWhatsappTemplateName(event.target.value)}
-                className="w-full rounded-lg border bg-background px-4 py-2 text-sm outline-none"
-                placeholder="WhatsApp template name"
-              />
+              <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                      Auto-selected template
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-foreground">
+                      {whatsappTemplateName || "No template selected"}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+                    {whatsappLanguageCode}
+                  </span>
+                </div>
+              </div>
 
-              <input
-                value={whatsappLanguageCode}
-                onChange={(event) => setWhatsappLanguageCode(event.target.value)}
-                className="w-full rounded-lg border bg-background px-4 py-2 text-sm outline-none"
-                placeholder="Language code"
-              />
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Button type="button" variant="outline" className="rounded-lg" onClick={() => { if (!debtCase) return; const template = getWhatsAppTemplateConfig(debtCase, "invoice"); setWhatsappTemplateName(template.templateName); setWhatsappLanguageCode(template.languageCode); setWhatsappVariablesText(template.variables.join("\n")); setBody(template.preview); setAttachInvoice(true); }}>Invoice template</Button>
+                <Button type="button" variant="outline" className="rounded-lg" onClick={() => { if (!debtCase) return; const template = getWhatsAppTemplateConfig(debtCase, "followup"); setWhatsappTemplateName(template.templateName); setWhatsappLanguageCode(template.languageCode); setWhatsappVariablesText(template.variables.join("\n")); setBody(template.preview); setAttachInvoice(false); }}>Follow-up template</Button>
+                <Button type="button" variant="outline" className="rounded-lg" onClick={() => { if (!debtCase) return; const template = getWhatsAppTemplateConfig(debtCase, "final-demand"); setWhatsappTemplateName(template.templateName); setWhatsappLanguageCode(template.languageCode); setWhatsappVariablesText(template.variables.join("\n")); setBody(template.preview); setAttachInvoice(false); }}>Final demand template</Button>
+              </div>
 
               <textarea
                 value={whatsappVariablesText}
                 onChange={(event) => setWhatsappVariablesText(event.target.value)}
-                className="min-h-[100px] w-full rounded-lg border bg-background px-4 py-2 text-sm outline-none"
-                placeholder="One template variable per line"
+                className="min-h-[120px] w-full rounded-lg border bg-background px-4 py-2 font-mono text-xs outline-none"
+                placeholder="One WhatsApp template variable per line"
               />
+
+              {renderAttachmentPanel()}
 
               <textarea
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
                 className="min-h-[100px] w-full rounded-lg border bg-background px-4 py-2 text-sm outline-none"
-                placeholder="Optional log notes for this WhatsApp action"
+                placeholder="Optional log notes / preview for this WhatsApp action"
               />
             </div>
           ) : null}
@@ -1726,7 +2329,7 @@ export default function DebtorCasePage() {
                 className="rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 <Send className="mr-2 h-4 w-4" />
-                {channel === "phone" ? "Save phone log" : "Send and log action"}
+                {channel === "phone" ? "Save phone log" : channel === "whatsapp" ? "Send WhatsApp and log" : "Send and log action"}
               </Button>
 
               <Button
@@ -1968,20 +2571,11 @@ export default function DebtorCasePage() {
               title="Send final demand"
               description="Send the final demand to start the 14‑day waiting period."
             >
-              {followUp7DaysLeft !== null && followUp7DaysLeft > 0 && (
-                <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
-                  There are {followUp7DaysLeft}{" "}
-                  day{followUp7DaysLeft === 1 ? "" : "s"} remaining in the second 7‑day wait. Sending the final demand now will skip the remainder of this period.
-                </p>
-              )}
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-lg"
-                onClick={applyFinalDemandDraft}
-              >
-                Use final demand draft
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant={channel === "email" ? "default" : "outline"} className="rounded-lg" onClick={() => { setChannel("email"); if (!debtCase) return; const draft = getFinalDemandDraft(debtCase, "email"); setSubject(draft.subject); setBody(draft.body); }}>Email final demand</Button>
+                <Button type="button" variant={channel === "whatsapp" ? "default" : "outline"} className="rounded-lg" onClick={() => { setChannel("whatsapp"); if (!debtCase) return; const template = getWhatsAppTemplateConfig(debtCase, "final-demand"); const draft = getFinalDemandDraft(debtCase, "whatsapp"); setWhatsappTemplateName(template.templateName); setWhatsappLanguageCode(template.languageCode); setWhatsappVariablesText(template.variables.join("\n")); setSubject(draft.subject); setBody(draft.body || template.preview); }}>WhatsApp final demand</Button>
+                <Button type="button" variant="outline" className="rounded-lg" onClick={applyFinalDemandDraft}>Use current draft</Button>
+              </div>
 
               {/* Editable email recipient for final demand */}
               <div className="space-y-1">
@@ -2015,6 +2609,20 @@ export default function DebtorCasePage() {
                 placeholder="Write the final demand email here."
               />
 
+              {channel === "whatsapp" ? (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground" htmlFor="final-demand-recipient-whatsapp">To</label>
+                    <input id="final-demand-recipient-whatsapp" type="tel" value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} className="w-full rounded-lg border bg-background px-4 py-2 text-sm outline-none" placeholder={debtCase?.ContactPhone || "Enter recipient phone"} />
+                  </div>
+                  <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-primary">Auto-selected WhatsApp template</p>
+                    <p className="mt-1 text-sm font-medium text-foreground">{whatsappTemplateName || "debt_final_demand_document"}</p>
+                  </div>
+                  <textarea value={whatsappVariablesText} onChange={(event) => setWhatsappVariablesText(event.target.value)} className="min-h-[120px] w-full rounded-lg border bg-background px-4 py-2 font-mono text-xs outline-none" placeholder="One WhatsApp template variable per line" />
+                </div>
+              ) : null}
+
               {renderAttachmentPanel()}
 
               <textarea
@@ -2025,11 +2633,11 @@ export default function DebtorCasePage() {
               />
 
               <Button
-                onClick={handleSendFinalDemandEmail}
+                onClick={handleSendFinalDemand}
                 disabled={!canAct || anyMutationLoading}
                 className="rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                Send final demand email
+                {channel === "whatsapp" ? "Send final demand WhatsApp" : "Send final demand email"}
               </Button>
             </ActionPanel>
           </SectionCard>
@@ -2397,6 +3005,8 @@ export default function DebtorCasePage() {
 
   return (
     <DebtAppShell>
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
       <DebtPageHeader
         badge="Debtor case"
         title={debtCase?.DebtorName ?? "Debt flow"}
@@ -2461,7 +3071,7 @@ export default function DebtorCasePage() {
                       {getStageLabel(workflowStatus)}
                     </span>
                     <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85">
-                      {formatCurrency(asNumber(debtCase.TotalOutstanding))}
+                      Verified paid: {formatCurrency(asNumber(transactionData?.money?.verifiedPaid))}
                     </span>
                     <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85">
                       Owner: {debtCase.CurrentOwnerName ?? "Unassigned"}
@@ -2469,6 +3079,7 @@ export default function DebtorCasePage() {
                   </div>
                 </div>
 
+               
                 <FlowTracker status={workflowStatus} />
 
                 <div className="rounded-xl bg-white/8 px-4 py-3 backdrop-blur-sm">
@@ -2504,6 +3115,28 @@ export default function DebtorCasePage() {
 
               {/* Display a couple of key metrics for quick context using consistent tiles */}
              
+
+              {/* <div className="grid gap-3 sm:grid-cols-3">
+                <MetricTile
+                  label="Verified paid"
+                  value={formatCurrency(asNumber(transactionData?.money?.verifiedPaid))}
+                  helper="From transaction controller"
+                />
+                <MetricTile
+                  label="Calculated remaining"
+                  value={formatCurrency(
+                    transactionData?.money?.calculatedRemaining !== undefined
+                      ? asNumber(transactionData.money.calculatedRemaining)
+                      : Math.max(asNumber(debtCase.TotalOutstanding) - asNumber(transactionData?.money?.verifiedPaid), 0),
+                  )}
+                  helper="Original debt less verified payments"
+                />
+                <MetricTile
+                  label="Payment progress"
+                  value={`${asNumber(transactionData?.money?.progressPercent)}%`}
+                  helper={`${asNumber(transactionData?.money?.transactionCount)} verified transaction(s)`}
+                />
+              </div> */}
 
               <div className="rounded-xl border border-border bg-background p-3">
                 <p className="text-sm font-medium text-foreground">Key dates</p>
@@ -2546,16 +3179,15 @@ export default function DebtorCasePage() {
               </div>
             </SectionCard>
           </div>
-
-          {/* Optional feedback message */}
-          {feedback ? (
-            <div className="rounded-xl border border-primary/10 bg-primary/[0.03] px-4 py-3 text-sm text-foreground">
-              {feedback}
-            </div>
-          ) : null}
+ <MoneyProgressBubble
+                  debtCase={debtCase}
+                  transactionData={transactionData}
+                  isLoading={caseTransactionsQuery.isLoading}
+                />
 
           {/* Full width action workspace */}
           {renderMainAction()}
+          
 
           {/* Optional early resolution panel.
              This panel allows collectors to mark the final outcome at any point in the process.
@@ -2614,18 +3246,7 @@ export default function DebtorCasePage() {
 
       <div className="mt-2 flex flex-col gap-2 sm:flex-row">
         <Button
-          onClick={() => {
-            const confirmOutcome = window.confirm(
-              "This will complete the debt case and skip any remaining stages. Are you sure you want to proceed?",
-            );
-
-            if (!confirmOutcome) {
-              setFeedback("Resolution cancelled.");
-              return;
-            }
-
-            handleConfirmResolution();
-          }}
+          onClick={requestEarlyResolutionConfirmation}
           disabled={!canAct || anyMutationLoading}
           className="flex-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
         >

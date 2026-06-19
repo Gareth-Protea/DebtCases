@@ -30,6 +30,36 @@ interface ApiResponse<T> {
   message?: string;
 }
 
+interface TransactionSummaryPayload {
+  verifiedIncome: number;
+  transactionCount: number;
+  paymentsTimeline: Array<{
+    date: string;
+    value: number;
+    count: number;
+  }>;
+  agentCollections: Array<{
+    name: string;
+    value: number;
+    count: number;
+  }>;
+  topPaidAccounts: Array<{
+    accountNo: string;
+    debtorName: string;
+    agentName: string;
+    amountPaid: number;
+    transactionCount: number;
+    lastPaymentAt: string | null;
+  }>;
+  source: string;
+  rule: string;
+  note: string;
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
 interface DebtCaseRow {
   DebtCaseID: number | string;
   AccountNo: string;
@@ -186,6 +216,25 @@ function formatDateLabel(value?: string | null): string {
     day: "numeric",
     month: "short",
   }).format(date);
+}
+
+function toYmd(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getCurrentMonthRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  return {
+    start: toYmd(start),
+    end: toYmd(end),
+  };
 }
 
 function isDueNow(value?: string | null): boolean {
@@ -810,6 +859,30 @@ export default function DebtActionPage() {
     [agents, user],
   );
 
+  const currentAgentId = currentAgent ? asNumber(currentAgent.ID, NaN) : NaN;
+
+  const currentMonthRange = useMemo(() => getCurrentMonthRange(), []);
+
+  const transactionsQuery = useQuery({
+    queryKey: [
+      "debt-manager",
+      "transactions",
+      "action-dashboard",
+      currentMonthRange.start,
+      currentMonthRange.end,
+      currentAgentId,
+    ],
+    enabled: Number.isFinite(currentAgentId),
+    queryFn: () =>
+      apiRequest<ApiResponse<TransactionSummaryPayload>>(
+        `/api/debt-manager/transactions?start=${encodeURIComponent(
+          currentMonthRange.start,
+        )}&end=${encodeURIComponent(currentMonthRange.end)}&agentId=${currentAgentId}`,
+      ),
+  });
+
+  const transactionSummary = transactionsQuery.data?.data ?? null;
+
   const assignMutation = useMutation({
     mutationFn: async (debtCaseId: string) => {
       if (!currentAgent) {
@@ -829,7 +902,10 @@ export default function DebtActionPage() {
       );
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["debt-manager", "cases"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["debt-manager", "cases"] }),
+        queryClient.invalidateQueries({ queryKey: ["debt-manager", "transactions"] }),
+      ]);
     },
   });
 
@@ -915,9 +991,12 @@ export default function DebtActionPage() {
       0,
     );
 
-    const paidCasesValue = cases
+    const unverifiedPaymentMarkerValue = cases
       .filter((item) => asBool(item.PaymentReceived))
       .reduce((sum, item) => sum + asNumber(item.TotalOutstanding), 0);
+
+    const verifiedCollectionValue = asNumber(transactionSummary?.verifiedIncome);
+    const verifiedTransactionCount = asNumber(transactionSummary?.transactionCount);
 
     const streakDays = asNumber(currentAgent?.CurrentStreakDays, 0);
 
@@ -929,15 +1008,17 @@ export default function DebtActionPage() {
       reminderDueSoonCount: followUpDueCases.length,
       myQueueValue,
       totalDebtOutstanding,
-      paidCasesValue,
+      unverifiedPaymentMarkerValue,
+      verifiedCollectionValue,
+      verifiedTransactionCount,
       streakDays,
       newestDebtorsCount: unassignedRows.length,
     };
-  }, [cases, currentAgent]);
+  }, [cases, currentAgent, transactionSummary]);
 
   const nextGoalAmount = Math.max(
     250000,
-    Math.ceil((summary.paidCasesValue + 50000) / 50000) * 50000,
+    Math.ceil((summary.verifiedCollectionValue + 50000) / 50000) * 50000,
   );
 
   const dashboardStats = [
@@ -963,6 +1044,13 @@ export default function DebtActionPage() {
       tone: "accent" as const,
     },
     {
+      label: "Verified collected",
+      value: formatCurrency(summary.verifiedCollectionValue),
+      helper: `${summary.verifiedTransactionCount} GL 1070 transaction(s) this month`,
+      icon: TrendingUp,
+      tone: "secondary" as const,
+    },
+    {
       label: "My queue value",
       value: formatCurrency(summary.myQueueValue),
       helper: "Current outstanding value under my ownership",
@@ -971,8 +1059,12 @@ export default function DebtActionPage() {
     },
   ];
 
-  const isLoading = authLoading || casesQuery.isLoading || agentsQuery.isLoading;
-  const hasError = casesQuery.isError || agentsQuery.isError;
+  const isLoading =
+    authLoading ||
+    casesQuery.isLoading ||
+    agentsQuery.isLoading ||
+    (Number.isFinite(currentAgentId) && transactionsQuery.isLoading);
+  const hasError = casesQuery.isError || agentsQuery.isError || transactionsQuery.isError;
 
   return (
     <DebtAppShell>
@@ -1031,13 +1123,26 @@ export default function DebtActionPage() {
             </div>
           </div>
 
-          <MoneyGoalProgress
-            currentAmount={summary.paidCasesValue}
-            monthlyTarget={nextGoalAmount}
-            nextGoalAmount={nextGoalAmount}
-            queueCount={summary.newestDebtorsCount}
-            streakDays={summary.streakDays}
-          />
+          <div className="space-y-3">
+            <MoneyGoalProgress
+              currentAmount={summary.verifiedCollectionValue}
+              monthlyTarget={nextGoalAmount}
+              nextGoalAmount={nextGoalAmount}
+              queueCount={summary.newestDebtorsCount}
+              streakDays={summary.streakDays}
+            />
+
+            <div className="rounded-2xl border border-white/12 bg-white/8 px-4 py-3 backdrop-blur-sm">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="mt-0.5 h-4 w-4 text-secondary" />
+                <p className="text-xs leading-5 text-white/70">
+                  Money progress now uses verified transaction data from{" "}
+                  <span className="font-semibold text-white">JournalTrans GL 1070 credits</span>.
+                  PaymentReceived markers are not counted as collected money.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1058,7 +1163,7 @@ export default function DebtActionPage() {
         </section>
       ) : (
         <div className="space-y-6">
-          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             {dashboardStats.map((stat) => (
               <StatCard key={stat.label} {...stat} />
             ))}

@@ -26,6 +26,9 @@ import {
 import { sendManualEmail } from "../controllers/debt-manager/debt-case-email.controller";
 import { ManagerSettingsController } from "../controllers/debt-manager/manager-settings.controller";
 import { StatsController } from "../controllers/debt-manager/stats.controller";
+import { TransactionsController } from "server/controllers/debt-manager/transactions.controller";
+import { WhatsAppController } from "server/controllers/debt-manager/whatsapp.controller";
+import { ObjectivesController } from "server/controllers/debt-manager/objectives.controller";
 
 export function registerDebtRoutes(
   app: Express,
@@ -115,5 +118,25 @@ app.post("/api/debt-manager/cases/:id/events/reminder", createDebtCaseReminderEv
     `${base}/agent-stats/:id?`,
     withAdmin(StatsController.getAgentStats),
   );
+
+  //Transaction Data
+  app.get(
+  "/api/debt-manager/transactions",
+  TransactionsController.getSummary,
+);
+
+app.get(
+  "/api/debt-manager/transactions/case/:id",
+  TransactionsController.getCaseTransactions,
+);
+
+// Whatsapp endpoints
+app.post("/api/whatsapp/send", WhatsAppController.sendTemplate);
+app.get("/api/whatsapp/messages", WhatsAppController.getMessages);
+app.get("/api/whatsapp/health", WhatsAppController.getHealth);
+
+//Objective Routes
+app.get("/api/debt-manager/objectives/:agentId", ObjectivesController.getAgentObjectives);
+app.post("/api/debt-manager/objectives/:agentId/refresh", ObjectivesController.refreshAgentObjectives);
 
 }

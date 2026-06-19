@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { soapSelect, toSqlDateTime } from "../../lib/debt-case-soap";
+import { getDebtCollectionTransactionSummary } from "./transactions.controller";
 
 type NumericRow = Record<string, string | number | null | undefined>;
 
@@ -61,33 +62,26 @@ function parseDateRange(req: Request) {
   };
 }
 
-/**
- * IMPORTANT MONEY NOTE:
- * Verified income is intentionally not calculated from DebtCase.PaymentReceived.
- * That field is user-marked and can be wrong. When you provide the real company
- * transaction query, replace this function only; the reports page already reads
- * from income.verifiedIncome.
- */
-async function getVerifiedDebtCollectionIncome(startSql: string, endSql: string) {
-  return {
-    verifiedIncome: 0,
-    transactionCount: 0,
-    source: "PENDING_TRANSACTION_QUERY",
-    note:
-      "Verified income is waiting for the company transaction query. User-marked payment flags are excluded from income.",
-    startSql,
-    endSql,
-  };
-}
 
 export class StatsController {
+  /*
+   * StatsController no longer owns the transaction query.
+   * Real money is centralized in transactions.controller.ts so reports,
+   * debtor-case-page, profile, dashboards and future features can reuse
+   * the exact same verified GL 1070 transaction logic.
+   */
   /**
    * GET /api/debt-manager/stats?start=YYYY-MM-DD&end=YYYY-MM-DD
    */
   static async getSummary(req: Request, res: Response) {
     try {
       const { startDate, endDate, startSql, endSql } = parseDateRange(req);
-      const verifiedIncome = await getVerifiedDebtCollectionIncome(startSql, endSql);
+      const income = await getDebtCollectionTransactionSummary({
+        startDate,
+        endDate,
+        topLimit: 10,
+        includeTransactions: false,
+      });
 
       const overviewRows = await soapSelect<NumericRow>(`
         SELECT
@@ -125,19 +119,26 @@ export class StatsController {
 
       const actionRows = await soapSelect<NumericRow>(`
         SELECT
-          SUM(CASE WHEN InvoiceSentAt >= ${startSql} AND InvoiceSentAt <= ${endSql} THEN 1 ELSE 0 END) AS InvoicesSent,
-          SUM(CASE WHEN FinalDemandSentAt >= ${startSql} AND FinalDemandSentAt <= ${endSql} THEN 1 ELSE 0 END) AS FinalDemandsSent,
-          SUM(CASE WHEN EscalatedToSuperiorAt >= ${startSql} AND EscalatedToSuperiorAt <= ${endSql} THEN 1 ELSE 0 END) AS SuperiorEscalations,
-          SUM(CASE WHEN ResolutionChosenAt >= ${startSql} AND ResolutionChosenAt <= ${endSql} THEN 1 ELSE 0 END) AS ResolutionsChosen,
-          SUM(CASE WHEN PaymentReceivedAt >= ${startSql} AND PaymentReceivedAt <= ${endSql} THEN 1 ELSE 0 END) AS PaymentMarkers
+          SUM(CASE WHEN e.IncludesInvoice = 1 THEN 1 ELSE 0 END) AS InvoicesSent,
+          SUM(CASE WHEN e.IncludesFinalDemand = 1 THEN 1 ELSE 0 END) AS FinalDemandsSent,
+          SUM(CASE WHEN e.ResolutionType IS NOT NULL THEN 1 ELSE 0 END) AS ResolutionsChosen,
+          SUM(CASE WHEN e.Title LIKE '%Escalat%' OR e.EventText LIKE '%Escalat%' THEN 1 ELSE 0 END) AS SuperiorEscalations
+        FROM [TestMetermisDB].[dbo].[DebtCaseEvent] e
+        WHERE e.CreatedAt >= ${startSql}
+          AND e.CreatedAt <= ${endSql}
+      `);
+      const paymentActionRows = await soapSelect<NumericRow>(`
+        SELECT COUNT(*) AS PaymentMarkers
         FROM [TestMetermisDB].[dbo].[DebtCase]
+        WHERE PaymentReceivedAt >= ${startSql}
+          AND PaymentReceivedAt <= ${endSql}
       `);
       const operationalActions = {
         invoicesSent: asNumber(actionRows[0]?.InvoicesSent),
         finalDemandsSent: asNumber(actionRows[0]?.FinalDemandsSent),
         superiorEscalations: asNumber(actionRows[0]?.SuperiorEscalations),
         resolutionsChosen: asNumber(actionRows[0]?.ResolutionsChosen),
-        paymentMarkers: asNumber(actionRows[0]?.PaymentMarkers),
+        paymentMarkers: asNumber(paymentActionRows[0]?.PaymentMarkers),
       };
 
       const unverifiedPaymentRows = await soapSelect<NumericRow>(`
@@ -204,35 +205,92 @@ export class StatsController {
       const waitingCount = waitingBreakdown.reduce((sum, item) => sum + item.count, 0);
       const waitingValue = waitingBreakdown.reduce((sum, item) => sum + item.value, 0);
 
+      /*
+       * Communication tracking:
+       * A real contact attempt is any DebtCaseEvent with CommunicationType populated.
+       * This catches invoice emails, final demands, follow-ups and general communications,
+       * even when their EventTypeID values differ.
+       */
       const contactRows = await soapSelect<{ CommType: string; Count: string | number }>(`
         SELECT UPPER(ISNULL(CommunicationType,'UNKNOWN')) AS CommType, COUNT(*) AS Count
         FROM [TestMetermisDB].[dbo].[DebtCaseEvent]
-        WHERE EventTypeID = 4 AND CreatedAt >= ${startSql} AND CreatedAt <= ${endSql}
+        WHERE CommunicationType IS NOT NULL
+          AND CreatedAt >= ${startSql}
+          AND CreatedAt <= ${endSql}
         GROUP BY UPPER(ISNULL(CommunicationType,'UNKNOWN'))
+        ORDER BY COUNT(*) DESC
       `);
       const contactCounts = rowsToCountMap(contactRows, "CommType");
       const contactAttemptsByType = rowsToChart(contactRows, "CommType");
       const totalContactAttempts = contactAttemptsByType.reduce((sum, item: any) => sum + asNumber(item.count), 0);
 
+      const contactSummaryRows = await soapSelect<NumericRow>(`
+        SELECT
+          COUNT(*) AS TotalContactAttempts,
+          SUM(CASE WHEN SuccessFlag = 1 THEN 1 ELSE 0 END) AS SuccessfulContacts,
+          SUM(CASE WHEN SuccessFlag = 0 THEN 1 ELSE 0 END) AS FailedContacts,
+          SUM(CASE WHEN Direction = 'OUTBOUND' THEN 1 ELSE 0 END) AS OutboundContacts,
+          SUM(CASE WHEN Direction = 'INBOUND' THEN 1 ELSE 0 END) AS InboundContacts,
+          SUM(CASE WHEN IncludesInvoice = 1 THEN 1 ELSE 0 END) AS InvoiceCommunications,
+          SUM(CASE WHEN IncludesFinalDemand = 1 THEN 1 ELSE 0 END) AS FinalDemandCommunications,
+          COUNT(DISTINCT DebtCaseID) AS UniqueCasesContacted,
+          COUNT(DISTINCT NULLIF(RecipientAddress,'')) AS UniqueRecipientsContacted
+        FROM [TestMetermisDB].[dbo].[DebtCaseEvent]
+        WHERE CommunicationType IS NOT NULL
+          AND CreatedAt >= ${startSql}
+          AND CreatedAt <= ${endSql}
+      `);
+      const contactSummary = contactSummaryRows[0] ?? {};
+      const successfulContacts = asNumber(contactSummary.SuccessfulContacts);
+      const failedContacts = asNumber(contactSummary.FailedContacts);
+      const contactSuccessRate = asPercent(successfulContacts, successfulContacts + failedContacts);
+
       const contactOutcomeRows = await soapSelect<{ Outcome: string; Count: string | number }>(`
         SELECT CASE WHEN SuccessFlag = 1 THEN 'SUCCESS' WHEN SuccessFlag = 0 THEN 'FAILED' ELSE 'UNKNOWN' END AS Outcome, COUNT(*) AS Count
         FROM [TestMetermisDB].[dbo].[DebtCaseEvent]
-        WHERE EventTypeID = 4 AND CreatedAt >= ${startSql} AND CreatedAt <= ${endSql}
+        WHERE CommunicationType IS NOT NULL
+          AND CreatedAt >= ${startSql}
+          AND CreatedAt <= ${endSql}
         GROUP BY CASE WHEN SuccessFlag = 1 THEN 'SUCCESS' WHEN SuccessFlag = 0 THEN 'FAILED' ELSE 'UNKNOWN' END
+        ORDER BY COUNT(*) DESC
       `);
       const contactOutcomes = rowsToChart(contactOutcomeRows, "Outcome");
-      const successfulContacts = contactOutcomeRows.filter((r) => String(r.Outcome).toUpperCase() === "SUCCESS").reduce((sum, r) => sum + asNumber(r.Count), 0);
-      const failedContacts = contactOutcomeRows.filter((r) => String(r.Outcome).toUpperCase() === "FAILED").reduce((sum, r) => sum + asNumber(r.Count), 0);
-      const contactSuccessRate = asPercent(successfulContacts, successfulContacts + failedContacts);
 
-      const dailyContactRows = await soapSelect<{ Day: string; Count: string | number }>(`
-        SELECT CONVERT(varchar(10), CreatedAt, 120) AS Day, COUNT(*) AS Count
+      const contactDirectionRows = await soapSelect<{ DirectionName: string; Count: string | number }>(`
+        SELECT UPPER(ISNULL(Direction,'UNKNOWN')) AS DirectionName, COUNT(*) AS Count
         FROM [TestMetermisDB].[dbo].[DebtCaseEvent]
-        WHERE EventTypeID = 4 AND CreatedAt >= ${startSql} AND CreatedAt <= ${endSql}
+        WHERE CommunicationType IS NOT NULL
+          AND CreatedAt >= ${startSql}
+          AND CreatedAt <= ${endSql}
+        GROUP BY UPPER(ISNULL(Direction,'UNKNOWN'))
+        ORDER BY COUNT(*) DESC
+      `);
+      const contactDirections = rowsToChart(contactDirectionRows, "DirectionName");
+
+      const dailyContactRows = await soapSelect<{
+        Day: string;
+        Count: string | number;
+        SuccessfulContacts: string | number;
+        FailedContacts: string | number;
+      }>(`
+        SELECT
+          CONVERT(varchar(10), CreatedAt, 120) AS Day,
+          COUNT(*) AS Count,
+          SUM(CASE WHEN SuccessFlag = 1 THEN 1 ELSE 0 END) AS SuccessfulContacts,
+          SUM(CASE WHEN SuccessFlag = 0 THEN 1 ELSE 0 END) AS FailedContacts
+        FROM [TestMetermisDB].[dbo].[DebtCaseEvent]
+        WHERE CommunicationType IS NOT NULL
+          AND CreatedAt >= ${startSql}
+          AND CreatedAt <= ${endSql}
         GROUP BY CONVERT(varchar(10), CreatedAt, 120)
         ORDER BY Day
       `);
-      const dailyContactTrend = dailyContactRows.map((row) => ({ day: String(row.Day), count: asNumber(row.Count) }));
+      const dailyContactTrend = dailyContactRows.map((row) => ({
+        day: String(row.Day),
+        count: asNumber(row.Count),
+        successfulContacts: asNumber(row.SuccessfulContacts),
+        failedContacts: asNumber(row.FailedContacts),
+      }));
 
       const priorityRows = await soapSelect<{ Priority: string; Count: string | number; TotalValue: string | number }>(`
         SELECT ISNULL(Priority,'Unknown') AS Priority, COUNT(*) AS Count, SUM(ISNULL(TotalOutstanding,0)) AS TotalValue
@@ -292,9 +350,9 @@ export class StatsController {
 
       const agentPerformanceRows = await soapSelect<{ AgentName: string; Events: string | number; Contacts: string | number; SuccessfulContacts: string | number; FailedContacts: string | number; CompletedTasks: string | number }>(`
         SELECT ISNULL(a.AgentName,'Unknown') AS AgentName, COUNT(e.DebtCaseEventID) AS Events,
-          SUM(CASE WHEN e.EventTypeID = 4 THEN 1 ELSE 0 END) AS Contacts,
-          SUM(CASE WHEN e.EventTypeID = 4 AND e.SuccessFlag = 1 THEN 1 ELSE 0 END) AS SuccessfulContacts,
-          SUM(CASE WHEN e.EventTypeID = 4 AND e.SuccessFlag = 0 THEN 1 ELSE 0 END) AS FailedContacts,
+          SUM(CASE WHEN e.CommunicationType IS NOT NULL THEN 1 ELSE 0 END) AS Contacts,
+          SUM(CASE WHEN e.CommunicationType IS NOT NULL AND e.SuccessFlag = 1 THEN 1 ELSE 0 END) AS SuccessfulContacts,
+          SUM(CASE WHEN e.CommunicationType IS NOT NULL AND e.SuccessFlag = 0 THEN 1 ELSE 0 END) AS FailedContacts,
           SUM(CASE WHEN e.TaskStatus = 'COMPLETED' THEN 1 ELSE 0 END) AS CompletedTasks
         FROM [TestMetermisDB].[dbo].[DebtCaseAgents] a
         LEFT JOIN [TestMetermisDB].[dbo].[DebtCaseEvent] e ON e.TriggeredByAgentID = a.ID AND e.CreatedAt >= ${startSql} AND e.CreatedAt <= ${endSql}
@@ -315,7 +373,7 @@ export class StatsController {
         SELECT DebtCaseID, CreatedAt FROM [TestMetermisDB].[dbo].[DebtCase] WHERE CreatedAt IS NOT NULL
       `);
       const firstResponseEventRows = await soapSelect<{ DebtCaseID: string | number; CreatedAt: string }>(`
-        SELECT DebtCaseID, CreatedAt FROM [TestMetermisDB].[dbo].[DebtCaseEvent] WHERE EventTypeID = 4 AND CreatedAt IS NOT NULL
+        SELECT DebtCaseID, CreatedAt FROM [TestMetermisDB].[dbo].[DebtCaseEvent] WHERE CommunicationType IS NOT NULL AND CreatedAt IS NOT NULL
       `);
       const caseCreatedAt = new Map<string, Date>();
       for (const row of firstResponseCaseRows) {
@@ -369,18 +427,22 @@ export class StatsController {
       }
       const avgDaysToClose = closeDays.length ? closeDays.reduce((sum, value) => sum + value, 0) / closeDays.length : 0;
       const avgDaysToMarkedPayment = markedPaymentDays.length ? markedPaymentDays.reduce((sum, value) => sum + value, 0) / markedPaymentDays.length : 0;
-      const targetAttainment = totalOutstandingValue > 0 ? Math.round((verifiedIncome.verifiedIncome / totalOutstandingValue) * 100) : 0;
+      const targetAttainment = totalOutstandingValue > 0 ? Math.round((income.verifiedIncome / totalOutstandingValue) * 100) : 0;
 
       return res.json({
         success: true,
         data: {
           dateRange: { startDate: startDate.toISOString(), endDate: endDate.toISOString() },
-          collectedIncome: verifiedIncome.verifiedIncome,
+          collectedIncome: income.verifiedIncome,
           income: {
-            verifiedIncome: verifiedIncome.verifiedIncome,
-            transactionCount: verifiedIncome.transactionCount,
-            source: verifiedIncome.source,
-            note: verifiedIncome.note,
+            verifiedIncome: income.verifiedIncome,
+            transactionCount: income.transactionCount,
+            paymentsTimeline: income.paymentsTimeline,
+            agentCollections: income.agentCollections,
+            topPaidAccounts: income.topPaidAccounts,
+            source: income.source,
+            rule: income.rule,
+            note: income.note,
             unverifiedPaymentMarkers,
           },
           openDebtors,
@@ -415,6 +477,12 @@ export class StatsController {
             successfulContacts,
             failedContacts,
             contactSuccessRate,
+            outboundContacts: asNumber(contactSummary.OutboundContacts),
+            inboundContacts: asNumber(contactSummary.InboundContacts),
+            invoiceCommunications: asNumber(contactSummary.InvoiceCommunications),
+            finalDemandCommunications: asNumber(contactSummary.FinalDemandCommunications),
+            uniqueCasesContacted: asNumber(contactSummary.UniqueCasesContacted),
+            uniqueRecipientsContacted: asNumber(contactSummary.UniqueRecipientsContacted),
             avgFirstResponseHours,
             responseWithin24hRate,
             avgDaysToClose,
@@ -437,6 +505,7 @@ export class StatsController {
             waitingBreakdown,
             contactAttemptsByType,
             contactOutcomes,
+            contactDirections,
             dailyContactTrend,
             priorityDistribution,
             recommendedPathDistribution,
@@ -444,6 +513,9 @@ export class StatsController {
             resolutionDistribution,
             agentWorkload,
             agentPerformance,
+            paymentsTimeline: income.paymentsTimeline,
+            agentCollections: income.agentCollections,
+            topPaidAccounts: income.topPaidAccounts,
           },
         },
       });

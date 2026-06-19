@@ -1,16 +1,25 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   Award,
   BadgeCheck,
+  BriefcaseBusiness,
   CalendarDays,
+  CheckCircle2,
+  Clock3,
   Coins,
   Crown,
   Flame,
+  Gauge,
+  Gem,
+  Layers3,
   Mail,
+  Medal,
   Palette,
   Phone,
+  Radio,
+  Rocket,
   Shield,
   ShoppingBag,
   Sparkles,
@@ -19,13 +28,14 @@ import {
   TrendingUp,
   Trophy,
   UserCircle2,
+  WalletCards,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
 import { DebtAppShell } from "./ui/debt-app-shell";
 import { DebtPageHeader } from "./ui/debt-page-header";
-import { StatCard } from "./ui/stat-card";
-import { Button } from "@/components/ui/button";
 
 interface ApiResponse<T> {
   success: boolean;
@@ -87,12 +97,13 @@ interface DebtCaseRow {
 interface AchievementItem {
   title: string;
   description: string;
-  icon: typeof Flame;
+  icon: LucideIcon;
 }
 
 interface MilestoneItem {
   title: string;
   date: string;
+  icon: LucideIcon;
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -134,12 +145,34 @@ function parseDate(value?: string | null): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function sameMonth(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
+function normalizeText(value?: string | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-ZA", {
     style: "currency",
     currency: "ZAR",
     maximumFractionDigits: 0,
   }).format(amount);
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-ZA", {
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
 function formatDate(value?: string | null): string {
@@ -170,8 +203,31 @@ function formatRelativeLabel(value?: string | null): string {
   return rtf.format(diffDays, "day");
 }
 
-function normalizeText(value?: string | null): string {
-  return (value ?? "").trim().toLowerCase();
+function getInitials(name?: string | null): string {
+  const parts = (name ?? "Collector")
+    .split(" ")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (!parts.length) return "C";
+  return parts
+    .slice(0, 2)
+    .map((item) => item[0]?.toUpperCase())
+    .join("");
+}
+
+function getAccessLabel(accessLevel: number): string {
+  if (accessLevel >= 3) return "Admin access";
+  if (accessLevel === 2) return "Supervisor access";
+  return "Collector access";
+}
+
+function getRankTitle(level: number): string {
+  if (level >= 25) return "Legendary Collector";
+  if (level >= 15) return "Senior Recovery Specialist";
+  if (level >= 10) return "Elite Collector";
+  if (level >= 5) return "Case Controller";
+  return "Debt Collections Agent";
 }
 
 function resolveCurrentAgent(
@@ -200,16 +256,15 @@ function resolveCurrentAgent(
   );
 }
 
-function sameCalendarDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+function parseInventoryCount(raw?: string | null): number {
+  if (!raw) return 0;
 
-function sameMonth(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function tryParseAchievements(raw?: string | null): AchievementItem[] | null {
@@ -219,7 +274,7 @@ function tryParseAchievements(raw?: string | null): AchievementItem[] | null {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return null;
 
-    const iconCycle = [Flame, BadgeCheck, Shield, Sparkles] as const;
+    const iconCycle = [Flame, BadgeCheck, Shield, Sparkles, Trophy, Star] as const;
 
     return parsed
       .map((item, index) => {
@@ -254,34 +309,198 @@ function tryParseAchievements(raw?: string | null): AchievementItem[] | null {
   }
 }
 
-function parseInventoryCount(raw?: string | null): number {
-  if (!raw) return 0;
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.length : 0;
-  } catch {
-    return 0;
-  }
-}
-
 function getThemePreviewClass(theme?: string | null, accent?: string | null) {
   const themeKey = normalizeText(theme);
   const accentKey = normalizeText(accent);
 
   if (themeKey.includes("gold") || accentKey.includes("gold")) {
-    return "bg-[linear-gradient(135deg,hsl(220,100%,9%)_0%,hsl(40,90%,26%)_45%,hsl(45,96%,58%)_120%)]";
+    return "bg-[radial-gradient(circle_at_10%_10%,rgba(250,204,21,0.35),transparent_28%),linear-gradient(135deg,hsl(220,100%,9%)_0%,hsl(40,90%,26%)_48%,hsl(45,96%,58%)_135%)]";
   }
 
   if (themeKey.includes("emerald") || accentKey.includes("green")) {
-    return "bg-[linear-gradient(135deg,hsl(220,100%,12%)_0%,hsl(142,100%,24%)_50%,hsl(142,100%,44%)_120%)]";
+    return "bg-[radial-gradient(circle_at_18%_18%,rgba(0,224,104,0.32),transparent_30%),linear-gradient(135deg,hsl(220,100%,12%)_0%,hsl(142,100%,23%)_55%,hsl(142,100%,44%)_130%)]";
   }
 
   if (themeKey.includes("neon") || accentKey.includes("pink")) {
-    return "bg-[linear-gradient(135deg,hsl(220,100%,12%)_0%,hsl(280,85%,38%)_50%,hsl(341,72%,74%)_120%)]";
+    return "bg-[radial-gradient(circle_at_20%_20%,rgba(233,30,99,0.30),transparent_30%),linear-gradient(135deg,hsl(220,100%,12%)_0%,hsl(280,85%,38%)_50%,hsl(341,72%,74%)_130%)]";
   }
 
-  return "bg-[linear-gradient(135deg,hsl(220,100%,15%)_0%,hsl(220,100%,18%)_58%,hsl(142,100%,34%)_140%)]";
+  return "bg-[radial-gradient(circle_at_18%_18%,rgba(0,224,104,0.25),transparent_30%),linear-gradient(135deg,hsl(220,100%,15%)_0%,hsl(220,100%,18%)_58%,hsl(142,100%,34%)_140%)]";
+}
+
+function ProfileKpi({
+  label,
+  value,
+  helper,
+  icon: Icon,
+  tone = "primary",
+}: {
+  label: string;
+  value: string;
+  helper: string;
+  icon: LucideIcon;
+  tone?: "primary" | "secondary" | "accent" | "gold";
+}) {
+  const toneMap = {
+    primary: "bg-primary/10 text-primary border-primary/15",
+    secondary: "bg-secondary/10 text-[hsl(142,100%,26%)] border-secondary/20",
+    accent: "bg-accent/15 text-[hsl(341,72%,42%)] border-accent/30",
+    gold: "bg-[hsl(45,96%,58%)]/16 text-[hsl(38,92%,34%)] border-[hsl(45,96%,58%)]/30",
+  } as const;
+
+  return (
+    <div className="group relative overflow-hidden rounded-[24px] border border-border/70 bg-card p-5 shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-md">
+      <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,hsl(220,100%,15%),hsl(142,100%,44%))]" />
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-muted-foreground">{label}</p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight text-foreground">
+            {value}
+          </p>
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">{helper}</p>
+        </div>
+
+        <div className={`flex h-12 w-12 items-center justify-center rounded-2xl border ${toneMap[tone]}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GlassMetric({
+  label,
+  value,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  icon: LucideIcon;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur-sm">
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-white/55">
+        <Icon className="h-4 w-4" />
+        {label}
+      </div>
+      <p className="mt-2 text-lg font-semibold tracking-tight text-white">{value}</p>
+    </div>
+  );
+}
+
+function SectionPanel({
+  title,
+  subtitle,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-[28px] border border-border/70 bg-card shadow-sm">
+      <div className="flex items-start justify-between gap-4 border-b border-border/70 p-6">
+        <div>
+          <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/8 text-primary">
+            <Icon className="h-5 w-5" />
+          </div>
+          <h3 className="text-2xl font-semibold tracking-tight text-foreground">
+            {title}
+          </h3>
+          {subtitle ? (
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div className="p-6">{children}</div>
+    </section>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  helper,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  helper?: string;
+  icon: LucideIcon;
+}) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Icon className="h-4 w-4 text-primary" />
+        {label}
+      </div>
+      <p className="mt-2 text-xl font-semibold text-foreground">{value}</p>
+      {helper ? <p className="mt-1 text-xs text-muted-foreground">{helper}</p> : null}
+    </div>
+  );
+}
+
+function ProgressRing({ value }: { value: number }) {
+  const safe = Math.max(0, Math.min(100, value));
+  const circumference = 2 * Math.PI * 44;
+  const offset = circumference - (safe / 100) * circumference;
+
+  return (
+    <div className="relative h-28 w-28">
+      <svg className="h-28 w-28 -rotate-90" viewBox="0 0 100 100">
+        <circle
+          cx="50"
+          cy="50"
+          r="44"
+          stroke="rgba(255,255,255,0.14)"
+          strokeWidth="9"
+          fill="none"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r="44"
+          stroke="url(#profileProgress)"
+          strokeWidth="9"
+          strokeLinecap="round"
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+        <defs>
+          <linearGradient id="profileProgress" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="hsl(142,100%,50%)" />
+            <stop offset="100%" stopColor="hsl(45,96%,58%)" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+        <span className="text-2xl font-semibold tracking-tight">{safe}%</span>
+        <span className="text-[10px] uppercase tracking-wide text-white/55">XP</span>
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const normalized = normalizeText(status);
+  const style = normalized.includes("legal")
+    ? "bg-destructive/10 text-destructive border-destructive/20"
+    : normalized.includes("paid")
+      ? "bg-secondary/10 text-[hsl(142,100%,25%)] border-secondary/20"
+      : normalized.includes("reminder") || normalized.includes("wait")
+        ? "bg-[hsl(24,92%,56%)]/12 text-[hsl(24,82%,42%)] border-[hsl(24,92%,56%)]/20"
+        : "bg-primary/8 text-primary border-primary/15";
+
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${style}`}>
+      {status || "Open"}
+    </span>
+  );
 }
 
 export default function ProfilePage() {
@@ -325,6 +544,15 @@ export default function ProfilePage() {
 
   const profile = agentProfileQuery.data?.data ?? currentAgent ?? null;
 
+  const username =
+    profile?.AgentName ??
+    ((user as { username?: string | null } | null)?.username ?? "Collector");
+
+  const email =
+    profile?.Email ??
+    ((user as { email?: string | null } | null)?.email ??
+      "collector@proteametering.co.za");
+
   const profileSummary = useMemo(() => {
     const now = new Date();
     const ownedCases = Number.isFinite(currentAgentId)
@@ -333,13 +561,13 @@ export default function ProfilePage() {
         )
       : [];
 
-    const recoveredThisMonth = ownedCases.filter((item) => {
+    const paidMarkersThisMonth = ownedCases.filter((item) => {
       if (!asBool(item.PaymentReceived)) return false;
       const paymentDate = parseDate(item.PaymentReceivedAt ?? item.UpdatedAt);
       return paymentDate ? sameMonth(paymentDate, now) : false;
     });
 
-    const recoveredThisMonthAmount = recoveredThisMonth.reduce(
+    const markedRecoveredThisMonthAmount = paidMarkersThisMonth.reduce(
       (sum, item) => sum + asNumber(item.TotalOutstanding),
       0,
     );
@@ -348,16 +576,21 @@ export default function ProfilePage() {
     const reminderCases = ownedCases.filter(
       (item) =>
         normalizeText(item.CurrentStatusName).includes("reminder") ||
+        normalizeText(item.CurrentStatusName).includes("wait") ||
         parseDate(item.Reminder7DueAt) ||
         parseDate(item.Reminder14DueAt),
     );
 
-    const escalatedCases = ownedCases.filter((item) =>
-      asBool(item.EscalatedToSuperior),
+    const escalatedCases = ownedCases.filter((item) => asBool(item.EscalatedToSuperior));
+    const arrangementCases = ownedCases.filter((item) => asBool(item.ArrangementActive));
+    const highPriorityCases = ownedCases.filter((item) => normalizeText(item.Priority) === "high");
+    const totalOutstanding = activeCases.reduce(
+      (sum, item) => sum + asNumber(item.TotalOutstanding),
+      0,
     );
 
     const level = Math.max(1, asNumber(profile?.Level, 1));
-    const currentXp = asNumber(profile?.ExperiencePoints);
+    const currentXp = Math.max(0, asNumber(profile?.ExperiencePoints));
     const xpTarget = level * 100;
     const xpIntoCurrentLevel = currentXp - (level - 1) * 100;
     const xpProgress = Math.max(
@@ -366,7 +599,10 @@ export default function ProfilePage() {
     );
 
     const currentStreak = asNumber(profile?.CurrentStreakDays);
+    const longestStreak = asNumber(profile?.LongestStreakDays);
     const shopCoins = asNumber(profile?.ShopCoins);
+    const coinsEarnedLifetime = asNumber(profile?.CoinsEarnedLifetime);
+    const coinsSpentLifetime = asNumber(profile?.CoinsSpentLifetime);
     const objectivesCompleted = asNumber(profile?.ObjectivesCompleted);
     const inventoryCount = parseInventoryCount(profile?.InventoryJson);
 
@@ -394,99 +630,127 @@ export default function ProfilePage() {
     const weeklyProgress = weeklyRaw.map((item) => ({
       day: item.day,
       raw: item.raw,
-      value: Math.max(14, Math.round((item.raw / maxWeekly) * 100)),
+      value: Math.max(10, Math.round((item.raw / maxWeekly) * 100)),
     }));
+
+    const statusMap = new Map<string, { count: number; value: number }>();
+    for (const item of activeCases) {
+      const status = item.CurrentStatusName || "Open";
+      const current = statusMap.get(status) ?? { count: 0, value: 0 };
+      current.count += 1;
+      current.value += asNumber(item.TotalOutstanding);
+      statusMap.set(status, current);
+    }
+
+    const statusBreakdown = Array.from(statusMap.entries())
+      .map(([status, item]) => ({ status, ...item }))
+      .sort((a, b) => b.count - a.count);
+
+    const topCases = activeCases
+      .slice()
+      .sort((a, b) => asNumber(b.TotalOutstanding) - asNumber(a.TotalOutstanding))
+      .slice(0, 5);
 
     const parsedAchievements = tryParseAchievements(profile?.AchievementsJson);
     const achievements: AchievementItem[] =
       parsedAchievements && parsedAchievements.length
-        ? parsedAchievements.slice(0, 4)
+        ? parsedAchievements.slice(0, 6)
         : [
             {
               title: "Recovery Streak",
-              description: `${currentStreak} active days recorded`,
+              description: `${currentStreak} active day${currentStreak === 1 ? "" : "s"} recorded`,
               icon: Flame,
             },
             {
-              title: "Case Momentum",
-              description: `${activeCases.length} active cases under ownership`,
+              title: "Case Controller",
+              description: `${activeCases.length} active case${activeCases.length === 1 ? "" : "s"} under ownership`,
               icon: BadgeCheck,
             },
             {
-              title: "Queue Controller",
-              description: `${reminderCases.length} reminder-stage cases managed`,
+              title: "Queue Specialist",
+              description: `${reminderCases.length} waiting or reminder-stage case${reminderCases.length === 1 ? "" : "s"} managed`,
               icon: Shield,
             },
             {
               title: "Progress Builder",
-              description: `${currentXp} XP and ${shopCoins} shop coins earned`,
+              description: `${formatNumber(currentXp)} XP and ${formatNumber(shopCoins)} shop coins available`,
               icon: Sparkles,
+            },
+            {
+              title: "Objective Hunter",
+              description: `${formatNumber(objectivesCompleted)} objectives completed`,
+              icon: Target,
+            },
+            {
+              title: "Premium Locker",
+              description: `${formatNumber(inventoryCount)} cosmetic item${inventoryCount === 1 ? "" : "s"} owned`,
+              icon: Gem,
             },
           ];
 
     const recentMilestones: MilestoneItem[] = [
-      recoveredThisMonthAmount > 0
+      markedRecoveredThisMonthAmount > 0
         ? {
-            title: `Recovered ${formatCurrency(recoveredThisMonthAmount)} this month`,
+            title: `${formatCurrency(markedRecoveredThisMonthAmount)} marked recovered this month`,
             date: "This month",
+            icon: TrendingUp,
           }
         : {
-            title: "Collector profile is now linked to live case data",
+            title: "Collector profile is linked to live debt case data",
             date: "Now",
+            icon: Radio,
           },
       {
-        title: `${objectivesCompleted} objectives completed so far`,
+        title: `${formatNumber(objectivesCompleted)} objectives completed so far`,
         date: "Current",
+        icon: Target,
       },
       {
-        title: `${activeCases.length} active owned cases in the live queue`,
+        title: `${formatNumber(activeCases.length)} active owned cases in the live queue`,
         date: "Current",
+        icon: BriefcaseBusiness,
       },
       {
-        title: `${escalatedCases.length} cases escalated for support`,
+        title: `${formatNumber(escalatedCases.length)} cases escalated for support`,
         date: "Current",
+        icon: Shield,
       },
     ];
 
     return {
       ownedCases,
-      recoveredThisMonthAmount,
+      activeCases,
       activeCasesCount: activeCases.length,
       reminderCasesCount: reminderCases.length,
       escalatedCasesCount: escalatedCases.length,
+      arrangementCasesCount: arrangementCases.length,
+      highPriorityCasesCount: highPriorityCases.length,
+      totalOutstanding,
+      markedRecoveredThisMonthAmount,
+      paidMarkersThisMonthCount: paidMarkersThisMonth.length,
       level,
       currentXp,
       xpTarget,
       xpProgress,
       currentStreak,
+      longestStreak,
       shopCoins,
+      coinsEarnedLifetime,
+      coinsSpentLifetime,
       objectivesCompleted,
       inventoryCount,
       weeklyProgress,
+      statusBreakdown,
+      topCases,
       achievements,
       recentMilestones,
     };
   }, [cases, currentAgentId, profile]);
 
-  const username =
-    profile?.AgentName ??
-    ((user as { username?: string | null } | null)?.username ?? "Collector");
-
-  const email =
-    profile?.Email ??
-    ((user as { email?: string | null } | null)?.email ??
-      "collector@proteametering.co.za");
-
   const phone = profile?.Phone ?? "—";
-  const displayTitle = profile?.DisplayTitle ?? "Debt Collections Agent";
+  const displayTitle = profile?.DisplayTitle ?? getRankTitle(profileSummary.level);
   const accessLevel = asNumber(profile?.AccessLevel, 1);
-  const accessLabel =
-    accessLevel >= 3
-      ? "Admin access"
-      : accessLevel === 2
-        ? "Supervisor access"
-        : "Collector access";
-
+  const accessLabel = getAccessLabel(accessLevel);
   const themePreviewClass = getThemePreviewClass(
     profile?.ProfileTheme,
     profile?.ProfileAccentColor,
@@ -506,7 +770,7 @@ export default function ProfilePage() {
       <DebtPageHeader
         badge="Profile"
         title="Collector profile"
-        description="A live performance hub for each collector using DebtCaseAgents and current debt case data."
+        description="A premium performance hub for collectors, rewards, workload, and live debt case activity."
         actions={
           <>
             <Button
@@ -530,7 +794,8 @@ export default function ProfilePage() {
       />
 
       {isLoading ? (
-        <section className="rounded-[28px] border border-border/70 bg-card p-8 text-center shadow-sm">
+        <section className="rounded-[28px] border border-border/70 bg-card p-10 text-center shadow-sm">
+          <div className="mx-auto mb-4 h-12 w-12 animate-pulse rounded-2xl bg-primary/10" />
           <p className="text-sm text-muted-foreground">Loading collector profile...</p>
         </section>
       ) : hasError ? (
@@ -550,302 +815,305 @@ export default function ProfilePage() {
           </p>
         </section>
       ) : (
-        <>
-          <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-            <div className="overflow-hidden rounded-[30px] border border-primary/10 bg-[linear-gradient(135deg,hsl(220,100%,15%)_0%,hsl(220,100%,18%)_58%,hsl(142,100%,34%)_140%)] p-6 text-white shadow-[0_24px_60px_-28px_rgba(8,38,84,0.55)]">
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-white/10 backdrop-blur-sm">
-                    <UserCircle2 className="h-12 w-12 text-white/90" />
+        <div className="space-y-6">
+          <section className={`relative overflow-hidden rounded-[34px] border border-primary/10 p-6 text-white shadow-[0_30px_80px_-36px_rgba(8,38,84,0.65)] ${themePreviewClass}`}>
+            <div className="absolute -right-24 -top-24 h-56 w-56 rounded-full bg-white/10 blur-3xl" />
+            <div className="absolute -bottom-28 left-20 h-56 w-56 rounded-full bg-secondary/20 blur-3xl" />
+
+            <div className="relative grid gap-8 xl:grid-cols-[1.05fr_0.95fr]">
+              <div className="space-y-6">
+                <div className="flex flex-col gap-5 lg:flex-row lg:items-center">
+                  <div className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-[32px] border border-white/15 bg-white/12 text-4xl font-semibold tracking-tight text-white shadow-[0_24px_60px_-32px_rgba(0,0,0,0.75)] backdrop-blur-md">
+                    <div className="absolute inset-0 rounded-[32px] bg-[linear-gradient(135deg,rgba(255,255,255,0.24),rgba(255,255,255,0.03))]" />
+                    <span className="relative">{getInitials(username)}</span>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="min-w-0 space-y-3">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium text-white/85 backdrop-blur-sm">
+                      <Sparkles className="h-3.5 w-3.5 text-[hsl(45,96%,68%)]" />
+                      Collector command profile
+                    </div>
+
                     <div>
-                      <h2 className="text-3xl font-semibold tracking-tight">{username}</h2>
-                      <p className="text-sm text-white/72">{displayTitle}</p>
+                      <h2 className="text-4xl font-semibold tracking-tight md:text-5xl">
+                        {username}
+                      </h2>
+                      <p className="mt-2 text-base text-white/72">{displayTitle}</p>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/85">
+                      <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-semibold text-white/90">
                         Level {profileSummary.level}
                       </span>
-                      <span className="rounded-full bg-secondary/15 px-3 py-1 text-xs font-medium text-white">
+                      <span className="rounded-full bg-secondary/18 px-3 py-1 text-xs font-semibold text-white">
                         {accessLabel}
                       </span>
-                      <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80">
-                        Streak: {profileSummary.currentStreak} days
+                      <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-semibold text-white/85">
+                        {profileSummary.currentStreak} day streak
+                      </span>
+                      <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-semibold text-white/85">
+                        {asBool(profile.IsActive) ? "Active profile" : "Profile loaded"}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-3 lg:w-[320px] lg:grid-cols-1">
-                  <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm">
-                    <p className="text-xs uppercase tracking-wide text-white/55">
-                      Current rank
-                    </p>
-                    <p className="mt-2 text-lg font-semibold">{displayTitle}</p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm">
-                    <p className="text-xs uppercase tracking-wide text-white/55">
-                      Monthly recovery
-                    </p>
-                    <p className="mt-2 text-lg font-semibold">
-                      {formatCurrency(profileSummary.recoveredThisMonthAmount)}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white/10 p-4 backdrop-blur-sm">
-                    <p className="text-xs uppercase tracking-wide text-white/55">
-                      Shop coins
-                    </p>
-                    <p className="mt-2 text-lg font-semibold">
-                      {profileSummary.shopCoins}
-                    </p>
-                  </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <GlassMetric
+                    label="Marked recovery"
+                    value={formatCurrency(profileSummary.markedRecoveredThisMonthAmount)}
+                    icon={TrendingUp}
+                  />
+                  <GlassMetric
+                    label="Active exposure"
+                    value={formatCurrency(profileSummary.totalOutstanding)}
+                    icon={WalletCards}
+                  />
+                  <GlassMetric
+                    label="Shop balance"
+                    value={`${formatNumber(profileSummary.shopCoins)} coins`}
+                    icon={Coins}
+                  />
                 </div>
-              </div>
 
-              <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_0.9fr]">
-                <div className="rounded-[24px] border border-white/10 bg-white/8 p-4">
-                  <div className="mb-2 flex items-center gap-2 text-sm text-white/75">
-                    <Trophy className="h-4 w-4 text-secondary" />
-                    Collector progression
-                  </div>
-
-                  <div className="flex items-end justify-between gap-3">
+                <div className="rounded-[26px] border border-white/10 bg-white/8 p-4 backdrop-blur-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-3xl font-semibold tracking-tight">
-                        {profileSummary.currentXp} XP
-                      </p>
-                      <p className="text-xs text-white/62">
-                        {Math.max(
-                          0,
-                          profileSummary.xpTarget - profileSummary.currentXp,
-                        )}{" "}
-                        XP to next level
-                      </p>
+                      <p className="text-sm font-semibold text-white">Bio</p>
+                      <p className="text-xs text-white/55">Collector profile summary</p>
                     </div>
-
-                    <div className="rounded-2xl bg-white/10 px-3 py-2 text-right">
-                      <p className="text-[11px] uppercase tracking-wide text-white/50">
-                        Progress
-                      </p>
-                      <p className="mt-1 text-sm font-semibold">
-                        {profileSummary.xpProgress}%
-                      </p>
-                    </div>
+                    <BadgeCheck className="h-5 w-5 text-secondary" />
                   </div>
-
-                  <div className="mt-4 h-2.5 rounded-full bg-white/10">
-                    <div
-                      className="h-2.5 rounded-full bg-[linear-gradient(90deg,hsl(142,100%,50%)_0%,hsl(45,96%,58%)_100%)] transition-all duration-500"
-                      style={{ width: `${profileSummary.xpProgress}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-[24px] border border-white/10 bg-white/8 p-4">
-                  <div className="mb-3 flex items-center gap-2 text-sm text-white/75">
-                    <Award className="h-4 w-4 text-[hsl(45,96%,58%)]" />
-                    Contact details
-                  </div>
-
-                  <div className="space-y-3 text-sm text-white/82">
-                    <div className="flex items-center gap-3">
-                      <Mail className="h-4 w-4 text-white/60" />
-                      <span>{email}</span>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <Phone className="h-4 w-4 text-white/60" />
-                      <span>{phone}</span>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <Shield className="h-4 w-4 text-white/60" />
-                      <span>{accessLabel}</span>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <CalendarDays className="h-4 w-4 text-white/60" />
-                      <span>Member since {formatDate(profile.CreatedAt)}</span>
-                    </div>
-                  </div>
+                  <p className="text-sm leading-6 text-white/76">
+                    {profile.Bio ||
+                      "Focused on clean follow-up, debtor communication, and keeping the collection queue moving with accurate case notes."}
+                  </p>
                 </div>
               </div>
-            </div>
 
-            <div className="grid gap-4">
-              <StatCard
-                label="Collected this month"
-                value={formatCurrency(profileSummary.recoveredThisMonthAmount)}
-                helper="Live value from paid owned cases"
-                icon={TrendingUp}
-                tone="secondary"
-              />
-              <StatCard
-                label="Owned active cases"
-                value={String(profileSummary.activeCasesCount)}
-                helper="Cases currently under this collector"
-                icon={BadgeCheck}
-                tone="primary"
-              />
-              <StatCard
-                label="Current streak"
-                value={`${profileSummary.currentStreak} days`}
-                helper="Pulled from DebtCaseAgents"
-                icon={Flame}
-                tone="accent"
-              />
-              <StatCard
-                label="Level progress"
-                value={`${profileSummary.xpProgress}%`}
-                helper={`${profileSummary.currentXp} / ${profileSummary.xpTarget} XP`}
-                icon={Star}
-                tone="primary"
-              />
+              <div className="grid gap-4 lg:grid-cols-[1fr_auto] xl:grid-cols-1">
+                <div className="rounded-[30px] border border-white/12 bg-white/10 p-5 backdrop-blur-md">
+                  <div className="flex items-center justify-between gap-5">
+                    <div>
+                      <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/80">
+                        <Rocket className="h-3.5 w-3.5" />
+                        Next level progress
+                      </div>
+                      <p className="text-3xl font-semibold tracking-tight">
+                        {formatNumber(profileSummary.currentXp)} XP
+                      </p>
+                      <p className="mt-1 text-sm text-white/62">
+                        {formatNumber(Math.max(0, profileSummary.xpTarget - profileSummary.currentXp))} XP to next level
+                      </p>
+                    </div>
+                    <ProgressRing value={profileSummary.xpProgress} />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-2">
+                  <GlassMetric
+                    label="Current streak"
+                    value={`${profileSummary.currentStreak} days`}
+                    icon={Flame}
+                  />
+                  <GlassMetric
+                    label="Best streak"
+                    value={`${profileSummary.longestStreak} days`}
+                    icon={Medal}
+                  />
+                  <GlassMetric
+                    label="Objectives"
+                    value={formatNumber(profileSummary.objectivesCompleted)}
+                    icon={Target}
+                  />
+                  <GlassMetric
+                    label="Locker items"
+                    value={formatNumber(profileSummary.inventoryCount)}
+                    icon={Gem}
+                  />
+                </div>
+              </div>
             </div>
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-[28px] border border-border/70 bg-card shadow-sm">
-              <div className="border-b border-border/70 p-6">
-                <h3 className="text-2xl font-semibold tracking-tight text-foreground">
-                  Weekly performance rhythm
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  A live pulse of owned case activity based on recent case updates.
-                </p>
-              </div>
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <ProfileKpi
+              label="Owned active cases"
+              value={formatNumber(profileSummary.activeCasesCount)}
+              helper="Cases currently under this collector"
+              icon={BriefcaseBusiness}
+              tone="primary"
+            />
+            <ProfileKpi
+              label="Waiting cases"
+              value={formatNumber(profileSummary.reminderCasesCount)}
+              helper="Reminder or waiting-stage items"
+              icon={Clock3}
+              tone="gold"
+            />
+            <ProfileKpi
+              label="Escalations"
+              value={formatNumber(profileSummary.escalatedCasesCount)}
+              helper="Cases requiring superior support"
+              icon={Shield}
+              tone="accent"
+            />
+            <ProfileKpi
+              label="Level progress"
+              value={`${profileSummary.xpProgress}%`}
+              helper={`${formatNumber(profileSummary.currentXp)} / ${formatNumber(profileSummary.xpTarget)} XP`}
+              icon={Gauge}
+              tone="secondary"
+            />
+          </section>
 
-              <div className="p-6">
-                <div className="flex h-[240px] items-end gap-3">
-                  {profileSummary.weeklyProgress.map((item) => (
-                    <div key={item.day} className="flex flex-1 flex-col items-center gap-3">
-                      <span className="text-[11px] font-medium text-muted-foreground">
-                        {item.raw}
-                      </span>
-                      <div className="flex h-[180px] w-full items-end rounded-2xl bg-muted/45 p-1">
-                        <div
-                          className="w-full rounded-[18px] bg-[linear-gradient(180deg,hsl(220,100%,15%)_0%,hsl(142,100%,44%)_100%)] transition-all duration-500"
-                          style={{ height: `${item.value}%` }}
-                        />
-                      </div>
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {item.day}
-                      </span>
+          <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <SectionPanel
+              title="Weekly performance rhythm"
+              subtitle="A compact activity pulse based on case updates owned by this collector."
+              icon={TrendingUp}
+            >
+              <div className="flex h-[260px] items-end gap-3">
+                {profileSummary.weeklyProgress.map((item) => (
+                  <div key={item.day} className="flex flex-1 flex-col items-center gap-3">
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {item.raw}
+                    </span>
+                    <div className="flex h-[190px] w-full items-end rounded-2xl bg-muted/45 p-1.5">
+                      <div
+                        className="w-full rounded-[18px] bg-[linear-gradient(180deg,hsl(220,100%,15%)_0%,hsl(142,100%,44%)_100%)] shadow-[0_16px_40px_-24px_rgba(8,38,84,0.8)] transition-all duration-500"
+                        style={{ height: `${item.value}%` }}
+                      />
                     </div>
-                  ))}
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {item.day}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </SectionPanel>
+
+            <SectionPanel
+              title="Contact card"
+              subtitle="Quick identity, access, and profile metadata."
+              icon={UserCircle2}
+            >
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+                  <div className="flex items-center gap-3">
+                    <Mail className="h-4 w-4 text-primary" />
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Email</p>
+                      <p className="truncate text-sm font-semibold text-foreground">{email}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-muted/25 p-4">
+                  <div className="flex items-center gap-3">
+                    <Phone className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Phone</p>
+                      <p className="text-sm font-semibold text-foreground">{phone}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MiniStat
+                    label="Access"
+                    value={accessLabel}
+                    helper={`Level ${accessLevel}`}
+                    icon={Shield}
+                  />
+                  <MiniStat
+                    label="Member since"
+                    value={formatDate(profile.CreatedAt)}
+                    helper={`Last login ${formatRelativeLabel(profile.LastLoginAt)}`}
+                    icon={CalendarDays}
+                  />
                 </div>
               </div>
-            </div>
+            </SectionPanel>
+          </section>
 
+          <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
             <div className="space-y-6">
-              <div className="overflow-hidden rounded-[28px] border border-primary/10 bg-card shadow-sm">
-                <div className={`relative p-6 text-white ${themePreviewClass}`}>
-                  <div className="absolute -right-10 -top-10 h-24 w-24 rounded-full bg-white/10 blur-2xl" />
-                  <div className="relative flex items-start justify-between gap-4">
+              <SectionPanel
+                title="Collector boutique"
+                subtitle="Coins, themes, titles, and cosmetics from the collector shop."
+                icon={ShoppingBag}
+              >
+                <div className={`mb-4 overflow-hidden rounded-[24px] p-5 text-white ${themePreviewClass}`}>
+                  <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-white/12 px-3 py-1 text-xs font-medium backdrop-blur-sm">
-                        <ShoppingBag className="h-3.5 w-3.5" />
-                        Collector boutique
+                      <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-white/12 px-3 py-1 text-xs font-semibold text-white/85">
+                        <Crown className="h-3.5 w-3.5" />
+                        Equipped style
                       </div>
-                      <h3 className="text-2xl font-semibold tracking-tight">
-                        Your premium loadout
-                      </h3>
-                      <p className="mt-2 max-w-md text-sm leading-6 text-white/78">
-                        Themes, titles, profile cosmetics, and future collector rewards all live in the shop.
+                      <h4 className="text-2xl font-semibold tracking-tight">
+                        {profile.ProfileTheme ?? "Core Protea"}
+                      </h4>
+                      <p className="mt-2 text-sm leading-6 text-white/72">
+                        {profile.ProfileAccentColor
+                          ? `Accent: ${profile.ProfileAccentColor}`
+                          : "Default Protea command theme"}
                       </p>
                     </div>
-
                     <Button
                       onClick={() => setLocation("/debt-manager/shop")}
                       className="bg-white text-primary hover:bg-white/90"
                     >
-                      <ShoppingBag className="mr-2 h-4 w-4" />
-                      Visit shop
+                      Shop
                     </Button>
                   </div>
                 </div>
 
-                <div className="grid gap-3 p-6 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                      <Coins className="h-4 w-4 text-secondary" />
-                      Shop coins
-                    </div>
-                    <p className="text-xl font-semibold text-foreground">
-                      {profileSummary.shopCoins}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Ready to spend
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                      <Crown className="h-4 w-4 text-primary" />
-                      Equipped title
-                    </div>
-                    <p className="text-xl font-semibold text-foreground">
-                      {profile?.DisplayTitle ?? "Default"}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Active collector title
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                      <Palette className="h-4 w-4 text-primary" />
-                      Theme
-                    </div>
-                    <p className="text-xl font-semibold text-foreground">
-                      {profile?.ProfileTheme ?? "Core Protea"}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Current profile style
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                      <Sparkles className="h-4 w-4 text-accent" />
-                      Owned cosmetics
-                    </div>
-                    <p className="text-xl font-semibold text-foreground">
-                      {profileSummary.inventoryCount}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Items in your locker
-                    </p>
-                  </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MiniStat
+                    label="Available coins"
+                    value={formatNumber(profileSummary.shopCoins)}
+                    helper="Ready to spend"
+                    icon={Coins}
+                  />
+                  <MiniStat
+                    label="Lifetime earned"
+                    value={formatNumber(profileSummary.coinsEarnedLifetime)}
+                    helper={`${formatNumber(profileSummary.coinsSpentLifetime)} spent`}
+                    icon={WalletCards}
+                  />
+                  <MiniStat
+                    label="Equipped title"
+                    value={profile.DisplayTitle ?? "Default"}
+                    helper="Current display title"
+                    icon={Crown}
+                  />
+                  <MiniStat
+                    label="Locker"
+                    value={formatNumber(profileSummary.inventoryCount)}
+                    helper="Owned cosmetics"
+                    icon={Palette}
+                  />
                 </div>
-              </div>
+              </SectionPanel>
 
-              <div className="rounded-[28px] border border-border/70 bg-card shadow-sm">
-                <div className="border-b border-border/70 p-6">
-                  <h3 className="text-2xl font-semibold tracking-tight text-foreground">
-                    Achievements
-                  </h3>
-                </div>
-
-                <div className="grid gap-3 p-6">
+              <SectionPanel
+                title="Achievements"
+                subtitle="Unlocked or generated achievements based on live profile progress."
+                icon={Award}
+              >
+                <div className="grid gap-3">
                   {profileSummary.achievements.map((item) => {
                     const Icon = item.icon;
 
                     return (
                       <div
                         key={item.title}
-                        className="flex items-start gap-3 rounded-2xl bg-muted/35 p-4"
+                        className="group flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/25 p-4 transition hover:border-primary/20 hover:bg-primary/[0.03]"
                       >
-                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/5">
-                          <Icon className="h-5 w-5 text-primary" />
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/8 text-primary">
+                          <Icon className="h-5 w-5" />
                         </div>
                         <div>
-                          <p className="font-medium text-foreground">{item.title}</p>
+                          <p className="font-semibold text-foreground">{item.title}</p>
                           <p className="mt-1 text-sm leading-6 text-muted-foreground">
                             {item.description}
                           </p>
@@ -854,86 +1122,153 @@ export default function ProfilePage() {
                     );
                   })}
                 </div>
-              </div>
+              </SectionPanel>
+            </div>
 
-              <div className="rounded-[28px] border border-border/70 bg-card shadow-sm">
-                <div className="border-b border-border/70 p-6">
-                  <h3 className="text-2xl font-semibold tracking-tight text-foreground">
-                    Recent milestones
-                  </h3>
+            <div className="space-y-6">
+              <SectionPanel
+                title="Live workload snapshot"
+                subtitle="Current collector workload and exposure by workflow state."
+                icon={Layers3}
+              >
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <MiniStat
+                    label="Assigned"
+                    value={formatNumber(profileSummary.ownedCases.length)}
+                    helper="Total linked cases"
+                    icon={BriefcaseBusiness}
+                  />
+                  <MiniStat
+                    label="Active"
+                    value={formatNumber(profileSummary.activeCasesCount)}
+                    helper="Not marked paid"
+                    icon={Radio}
+                  />
+                  <MiniStat
+                    label="Arrangements"
+                    value={formatNumber(profileSummary.arrangementCasesCount)}
+                    helper="Active arrangements"
+                    icon={CheckCircle2}
+                  />
+                  <MiniStat
+                    label="High priority"
+                    value={formatNumber(profileSummary.highPriorityCasesCount)}
+                    helper="Priority queue"
+                    icon={Flame}
+                  />
                 </div>
 
-                <div className="space-y-3 p-6">
-                  {profileSummary.recentMilestones.map((item) => (
-                    <div
-                      key={`${item.title}-${item.date}`}
-                      className="flex items-start justify-between gap-3 rounded-2xl bg-muted/35 p-4"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-1 flex h-8 w-8 items-center justify-center rounded-xl bg-secondary/10">
-                          <Target className="h-4 w-4 text-secondary" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-foreground">{item.title}</p>
-                        </div>
-                      </div>
+                <div className="mt-5 space-y-3">
+                  {profileSummary.statusBreakdown.length ? (
+                    profileSummary.statusBreakdown.slice(0, 6).map((item) => {
+                      const percent = profileSummary.activeCasesCount
+                        ? Math.round((item.count / profileSummary.activeCasesCount) * 100)
+                        : 0;
 
-                      <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                        {item.date}
-                      </span>
+                      return (
+                        <div key={item.status} className="rounded-2xl border border-border/60 bg-background p-4">
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <StatusPill status={item.status} />
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-foreground">
+                                {formatNumber(item.count)} cases
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatCurrency(item.value)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="h-2 rounded-full bg-muted">
+                            <div
+                              className="h-2 rounded-full bg-[linear-gradient(90deg,hsl(220,100%,15%),hsl(142,100%,44%))]"
+                              style={{ width: `${Math.max(6, percent)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                      No active workload breakdown yet.
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
+              </SectionPanel>
 
-              <div className="rounded-[28px] border border-border/70 bg-card shadow-sm">
-                <div className="border-b border-border/70 p-6">
-                  <h3 className="text-2xl font-semibold tracking-tight text-foreground">
-                    Live collector snapshot
-                  </h3>
+              <SectionPanel
+                title="Top active cases"
+                subtitle="Largest active balances currently owned by this collector."
+                icon={Target}
+              >
+                {profileSummary.topCases.length ? (
+                  <div className="overflow-hidden rounded-2xl border border-border/70">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/45 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="px-4 py-3">Debtor</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3 text-right">Outstanding</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/70">
+                        {profileSummary.topCases.map((item) => (
+                          <tr key={String(item.DebtCaseID)} className="bg-card">
+                            <td className="px-4 py-3">
+                              <p className="font-semibold text-foreground">{item.DebtorName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {item.AccountNo} • {item.ComplexName ?? "No complex"}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <StatusPill status={item.CurrentStatusName ?? "Open"} />
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-foreground">
+                              {formatCurrency(asNumber(item.TotalOutstanding))}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                    No active cases are currently assigned to this profile.
+                  </div>
+                )}
+              </SectionPanel>
+
+              <SectionPanel
+                title="Recent milestones"
+                subtitle="A quick audit trail of current progress markers."
+                icon={Medal}
+              >
+                <div className="space-y-3">
+                  {profileSummary.recentMilestones.map((item) => {
+                    const Icon = item.icon;
+
+                    return (
+                      <div
+                        key={`${item.title}-${item.date}`}
+                        className="flex items-start justify-between gap-4 rounded-2xl border border-border/60 bg-muted/25 p-4"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-secondary/10 text-[hsl(142,100%,28%)]">
+                            <Icon className="h-4 w-4" />
+                          </div>
+                          <p className="font-medium leading-6 text-foreground">{item.title}</p>
+                        </div>
+
+                        <span className="shrink-0 rounded-full bg-background px-3 py-1 text-xs font-semibold text-muted-foreground">
+                          {item.date}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
-
-                <div className="grid gap-3 p-6 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Assigned cases
-                    </p>
-                    <p className="mt-2 text-xl font-semibold text-foreground">
-                      {profileSummary.ownedCases.length}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Reminder-stage cases
-                    </p>
-                    <p className="mt-2 text-xl font-semibold text-foreground">
-                      {profileSummary.reminderCasesCount}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Escalations
-                    </p>
-                    <p className="mt-2 text-xl font-semibold text-foreground">
-                      {profileSummary.escalatedCasesCount}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-muted/35 p-4">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Last login
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-foreground">
-                      {formatRelativeLabel(profile.LastLoginAt)}
-                    </p>
-                  </div>
-                </div>
-              </div>
+              </SectionPanel>
             </div>
           </section>
-        </>
+        </div>
       )}
     </DebtAppShell>
   );
